@@ -93,15 +93,15 @@ test('ÉTAT : 19 octets construits à la main', () => {
   assert.equal(e.rssi, -60);
 });
 
-test('ÉTAT : valeurs extrêmes et les 17 drapeaux levés', () => {
-  // x = -32768, y = 32767, cap = -18000 (0xb9b0), drapeaux = 0x01ffff, tête = -128, cible_gis = -128
-  const t = octets(0x81, 0x00, 0x80, 0xff, 0x7f, 0xb0, 0xb9, 0xff, 0xff, 0x01, 0, 0, 0x80, 0, 0x80, 0, 0, 0, 0x00);
+test('ÉTAT : valeurs extrêmes et les 18 drapeaux levés', () => {
+  // x = -32768, y = 32767, cap = -18000 (0xb9b0), drapeaux = 0x03ffff, tête = -128, cible_gis = -128
+  const t = octets(0x81, 0x00, 0x80, 0xff, 0x7f, 0xb0, 0xb9, 0xff, 0xff, 0x03, 0, 0, 0x80, 0, 0x80, 0, 0, 0, 0x00);
   const e = decoder(t);
   assert.equal(e.x, -32768); assert.equal(e.y, 32767);
   assert.equal(e.cap, -180);
-  assert.equal(e.drapeaux, 0x01ffff);
-  assert.ok(NOMS_DRAPEAUX.every((n) => e.flags[n] === true), 'les 17 drapeaux sont levés');
-  assert.equal(NOMS_DRAPEAUX.length, 17);
+  assert.equal(e.drapeaux, 0x03ffff);
+  assert.ok(NOMS_DRAPEAUX.every((n) => e.flags[n] === true), 'les 18 drapeaux sont levés');
+  assert.equal(NOMS_DRAPEAUX.length, 18);
   assert.equal(e.tete, -128); assert.equal(e.cibleGis, -128); assert.equal(e.rssi, 0);
 });
 

@@ -38,10 +38,11 @@ export const CASE_INCONNUE = 0;
 export const CASE_LIBRE = 1;
 export const CASE_OCCUPEE = 2;
 
-/** Les 17 drapeaux de la trame ÉTAT : numéro de bit -> nom. */
+/** Les 18 drapeaux de la trame ÉTAT : numéro de bit -> nom. */
 export const NOMS_DRAPEAUX = [
   'urgence', 'garde', 'obstacle', 'laisse', 'blocage', 'patine', 'batterie', 'driver_ko',
   'imu_ko', 'arrive', 'gyro_ok', 'aveugle', 'sature', 'retard', 'mouvement', 'cible', 'souleve',
+  'choc',
 ];
 
 /**
@@ -67,6 +68,7 @@ export const DRAPEAUX_FR = {
   mouvement: { texte: 'En mouvement', gravite: 'info' },
   cible: { texte: 'Cible suivie', gravite: 'info' },
   souleve: { texte: 'Rover soulevé', gravite: 'danger' },
+  choc: { texte: 'Contact avec un obstacle', gravite: 'danger' },
 };
 
 // ---------- Utilitaires d'octets ----------
