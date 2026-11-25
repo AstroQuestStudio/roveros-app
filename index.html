@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>RoverOS — télécommande</title>
+  <meta name="description" content="Télécommande web d'un rover à roues Mecanum : pilotage, carte en direct, comportements.">
+  <meta name="theme-color" content="#07080d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icones/icone.svg">
+  <link rel="apple-touch-icon" href="icones/icone-192.png">
+  <link rel="preload" href="css/polices/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="modulepreload" href="js/app.js">
+  <link rel="modulepreload" href="js/protocole.js">
+  <link rel="modulepreload" href="js/carte.js">
+  <link rel="modulepreload" href="js/manettes.js">
+  <link rel="modulepreload" href="js/transport.js">
+  <link rel="modulepreload" href="js/transport-demo.js">
+  <link rel="modulepreload" href="js/faux-rover.js">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app" data-vue="pilotage">
+
+  <!-- ===== En-tête : liaison, batterie, journal ===== -->
+  <header class="entete">
+    <div class="marque" aria-label="RoverOS">
+      <svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <circle cx="16" cy="16" r="3.2" fill="#f5a83a"/>
+        <path d="M7.5 22.5a12 12 0 0 1 0-13" fill="none" stroke="#4fe3d0" stroke-width="2" stroke-linecap="round"/>
+        <path d="M24.5 9.5a12 12 0 0 1 0 13" fill="none" stroke="#4fe3d0" stroke-width="2" stroke-linecap="round"/>
+        <path d="M11.4 19.6a6.4 6.4 0 0 1 0-7.2" fill="none" stroke="#4fe3d0" stroke-width="2" stroke-linecap="round" opacity=".6"/>
+        <path d="M20.6 12.4a6.4 6.4 0 0 1 0 7.2" fill="none" stroke="#4fe3d0" stroke-width="2" stroke-linecap="round" opacity=".6"/>
+      </svg>
+      <span class="marque-nom">RoverOS</span>
+    </div>
+    <button id="btn-liaison" class="puce-liaison" data-etat="deconnecte" type="button" aria-label="Liaison avec le rover">
+      <span class="voyant" aria-hidden="true"></span>
+      <span class="puce-textes">
+        <span id="liaison-texte" class="puce-titre">Hors ligne</span>
+        <span id="liaison-detail" class="puce-detail">Touchez pour vous connecter</span>
+      </span>
+      <span id="liaison-signal" class="signal" data-barres="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    </button>
+    <div id="entete-batt" class="entete-batt" hidden title="Tension de la batterie">
+      <span class="ico-batt" id="entete-batt-ico"></span>
+      <span id="entete-batt-v" class="chiffres">—</span>
+    </div>
+    <button id="btn-journal" class="btn-icone" type="button" aria-label="Ouvrir le journal"><span class="pastille" id="journal-pastille" hidden></span></button>
+  </header>
+
+  <!-- ===== Navigation ===== -->
+  <nav class="onglets" aria-label="Sections">
+    <button type="button" data-vue="pilotage" class="actif" aria-current="page"><span class="ico-slot" data-icone="pilotage"></span><span>Pilotage</span></button>
+    <button type="button" data-vue="modes"><span class="ico-slot" data-icone="modes"></span><span>Modes</span></button>
+    <button type="button" data-vue="bord"><span class="ico-slot" data-icone="bord"></span><span>Bord</span></button>
+    <button type="button" data-vue="reglages"><span class="ico-slot" data-icone="reglages"></span><span>Réglages</span></button>
+    <button type="button" data-vue="partage"><span class="ico-slot" data-icone="partage"></span><span>Partage</span></button>
+  </nav>
+
+  <main class="contenu">
+
+    <!-- ===== Pilotage : carte + manettes ===== -->
+    <section id="vue-pilotage" class="vue actif" aria-label="Pilotage">
+      <div class="carte-zone">
+        <canvas id="carte" aria-label="Carte en direct. Touchez un point pour y envoyer le rover."></canvas>
+        <div class="carte-info" aria-live="off">
+          <span class="jeton" id="info-mode">Manuel</span>
+          <span class="jeton discret chiffres" id="info-pos">0,00 ; 0,00 m</span>
+          <span class="jeton alerte" id="info-alerte" hidden></span>
+        </div>
+        <div class="carte-outils">
+          <button type="button" id="btn-recentrer" class="btn-icone rond actif" aria-label="Recentrer sur le rover"></button>
+          <button type="button" id="btn-zoom-plus" class="btn-icone rond" aria-label="Zoom avant"></button>
+          <button type="button" id="btn-zoom-moins" class="btn-icone rond" aria-label="Zoom arrière"></button>
+          <button type="button" id="btn-dispo" class="btn-icone rond" aria-label="Changer la disposition : télécommande ou carte"></button>
+        </div>
+        <div class="carte-vide" id="carte-vide">
+          <p>Aucun rover connecté</p>
+          <button type="button" class="bouton plein" id="btn-vide-connecter">Se connecter</button>
+        </div>
+      </div>
+
+      <div class="deck">
+        <div class="deck-panneau">
+          <div class="deck-commandes">
+            <div class="seg" role="group" aria-label="Repère de pilotage" id="seg-repere">
+              <button type="button" data-monde="0" class="actif" title="La direction suit le cap du rover">Rover</button>
+              <button type="button" data-monde="1" title="La direction ne dépend pas du cap">Monde</button>
+            </div>
+            <button type="button" id="btn-incliner" class="bascule" aria-pressed="false"><span class="ico-slot" data-icone="incliner"></span><span>Incliner</span></button>
+            <button type="button" id="btn-stop" class="bascule"><span class="ico-slot" data-icone="arret"></span><span>Stop</span></button>
+          </div>
+          <div class="deck-vitesse">
+            <span class="deck-vitesse-nom">Vitesse</span>
+            <div class="seg large" id="seg-vitesse" role="group" aria-label="Vitesse maximale en pour cent">
+              <button type="button" data-v="25">25</button>
+              <button type="button" data-v="50" class="actif">50</button>
+              <button type="button" data-v="75">75</button>
+              <button type="button" data-v="100">100</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Les zones captent le pouce n'importe où : la manette apparaît là où l'on pose le doigt. -->
+        <div class="zone zone-xy" id="zone-xy">
+          <div class="manette manette-xy" id="manette-xy" role="application" aria-label="Manette de déplacement : avant, arrière, côtés">
+            <svg class="manette-decor" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="30" class="anneau"/>
+              <path d="M50 9l-6 7h12zM50 91l-6-7h12zM9 50l7-6v12zM91 50l-7-6v12z" class="fleche"/>
+            </svg>
+            <div class="manette-pouce"></div>
+          </div>
+          <div class="manette manette-incl" id="manette-incl" hidden role="application" aria-label="Surface de pilotage par inclinaison : maintenir le doigt appuyé">
+            <svg class="manette-decor" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="30" class="anneau"/><circle cx="50" cy="50" r="14" class="anneau"/>
+              <path d="M50 9l-6 7h12zM50 91l-6-7h12zM9 50l7-6v12zM91 50l-7-6v12z" class="fleche"/>
+            </svg>
+            <div class="incl-point" id="incl-point"></div>
+          </div>
+          <span class="zone-aide" id="aide-xy">Glissez pour avancer</span>
+        </div>
+
+        <div class="zone zone-rot" id="zone-rot">
+          <div class="manette manette-rot" id="manette-rot" role="application" aria-label="Manette de rotation : gauche ou droite">
+            <svg class="manette-decor" viewBox="0 0 100 100" aria-hidden="true">
+              <path d="M24 50h52" class="rail"/>
+              <path d="M22 30a32 32 0 0 1 22-14M30 16l-6 2 3 6" class="rotation"/>
+              <path d="M78 30a32 32 0 0 0-22-14M70 16l6 2-3 6" class="rotation"/>
+              <path d="M22 70a32 32 0 0 0 22 14M30 84l-6-2 3-6" class="rotation" opacity=".35"/>
+              <path d="M78 70a32 32 0 0 1-22 14M70 84l6-2-3-6" class="rotation" opacity=".35"/>
+            </svg>
+            <div class="manette-pouce"></div>
+          </div>
+          <span class="zone-aide">Glissez pour tourner</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Comportements ===== -->
+    <section id="vue-modes" class="vue defilant" aria-label="Comportements">
+      <div class="page">
+        <h1>Comportements</h1>
+        <p class="aide" id="modes-aide">Lancez un comportement autonome. Toucher une manette reprend la main.</p>
+        <div id="modes-grille" class="grille-modes"></div>
+        <div id="modes-vide" class="etat-vide" hidden>
+          <p>Aucun comportement connu. La liste arrive du rover à la connexion.</p>
+          <button type="button" class="bouton" id="btn-modes-infos">Demander la liste</button>
+        </div>
+        <label class="reglage-ligne" id="modes-cote" hidden>
+          <span>Côté du carré et de la glisse <output id="cote-val" class="chiffres">0,5 m</output></span>
+          <input type="range" id="cote" min="0.2" max="1.2" step="0.1" value="0.5" aria-label="Côté en mètres">
+        </label>
+      </div>
+    </section>
+
+    <!-- ===== Tableau de bord ===== -->
+    <section id="vue-bord" class="vue defilant" aria-label="Tableau de bord">
+      <div class="page">
+        <h1>Tableau de bord</h1>
+        <div class="tuiles">
+          <div class="tuile large">
+            <div class="tuile-nom">Batterie</div>
+            <div class="batt-ligne"><span class="gros chiffres" id="b-tension">—</span><span class="unite">V</span><span class="petit chiffres" id="b-batt-pct">—</span></div>
+            <div class="jauge" id="b-batt-jauge" data-niveau="bon" aria-hidden="true"><i></i></div>
+          </div>
+          <div class="tuile"><div class="tuile-nom">Vitesse</div><div><span class="gros chiffres" id="b-vitesse">0</span><span class="unite">cm/s</span></div></div>
+          <div class="tuile"><div class="tuile-nom">Sonar</div><div><span class="gros chiffres" id="b-sonar">—</span><span class="unite">m</span></div></div>
+          <div class="tuile"><div class="tuile-nom">Cap</div><div><span class="gros chiffres" id="b-cap">0</span><span class="unite">°</span></div></div>
+          <div class="tuile"><div class="tuile-nom">Position (m)</div><div class="moyen chiffres" id="b-pos">0 ; 0</div></div>
+          <div class="tuile"><div class="tuile-nom">Voie libre</div><div class="moyen chiffres" id="b-libre">inconnue</div></div>
+          <div class="tuile"><div class="tuile-nom">Cible</div><div class="moyen chiffres" id="b-cible">aucune</div></div>
+          <div class="tuile large"><div class="tuile-nom">Comportement</div><div class="moyen" id="b-mode">manuel</div></div>
+        </div>
+        <h2>État du rover</h2>
+        <ul class="drapeaux" id="b-drapeaux"><li class="drapeau neutre">En attente du rover</li></ul>
+        <h2>Radar de la tête</h2>
+        <div class="radar-carte"><canvas id="radar-canvas" aria-label="Radar polaire de la tête du sonar"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ===== Réglages ===== -->
+    <section id="vue-reglages" class="vue defilant" aria-label="Réglages">
+      <div class="page">
+        <h1>Réglages</h1>
+
+        <h2>Commandes rapides</h2>
+        <div class="rangee-boutons">
+          <button type="button" class="bouton" data-cmd="recaler">Recaler ici</button>
+          <button type="button" class="bouton" data-cmd="carte raz">Effacer la carte</button>
+          <button type="button" class="bouton" data-cmd="infos">Actualiser infos</button>
+          <button type="button" class="bouton" data-cmd="params">Actualiser paramètres</button>
+        </div>
+        <p class="aide">Mode du radar (la tête du sonar)</p>
+        <div class="seg large" id="seg-radar" role="group" aria-label="Mode du radar">
+          <button type="button" data-radar="auto" class="actif">Auto</button>
+          <button type="button" data-radar="balayage">Balayage</button>
+          <button type="button" data-radar="fixe">Fixe</button>
+          <button type="button" data-radar="suivi">Suivi</button>
+          <button type="button" data-radar="arret">Arrêt</button>
+        </div>
+
+        <h2>Vitesse maximale</h2>
+        <label class="reglage-ligne premier">
+          <span>Part de la vitesse du rover <output id="vitesse-val" class="chiffres">50 %</output></span>
+          <input id="vitesse" type="range" min="10" max="100" step="5" value="50" aria-label="Vitesse maximale en pour cent">
+        </label>
+
+        <h2>Confort</h2>
+        <div class="interrupteurs">
+          <button type="button" class="interrupteur" role="switch" aria-checked="true" id="sw-ecran"><span>Garder l'écran allumé</span><i></i></button>
+          <button type="button" class="interrupteur" role="switch" aria-checked="true" id="sw-vibr"><span>Vibrations</span><i></i></button>
+          <button type="button" class="interrupteur" role="switch" aria-checked="false" id="sw-gaucher"><span>Mode gaucher</span><i></i></button>
+          <button type="button" class="interrupteur" role="switch" aria-checked="true" id="sw-commande"><span>Disposition télécommande</span><i></i></button>
+        </div>
+        <div class="rangee-boutons"><button type="button" class="bouton" id="btn-plein-ecran">Plein écran</button></div>
+
+        <h2>Inclinaison du téléphone</h2>
+        <label class="reglage-ligne"><span>Zone morte <output id="incl-zone-val" class="chiffres">4°</output></span><input type="range" id="incl-zone" min="1" max="12" step="1" value="4"></label>
+        <label class="reglage-ligne"><span>Angle pour la pleine vitesse <output id="incl-plein-val" class="chiffres">25°</output></span><input type="range" id="incl-plein" min="12" max="45" step="1" value="25"></label>
+        <div class="rangee-boutons">
+          <button type="button" class="bouton" id="btn-neutre">Calibrer le neutre</button>
+          <span class="aide" id="incl-etat">Inactive</span>
+        </div>
+
+        <h2>Paramètres du rover</h2>
+        <div class="recherche">
+          <span class="ico-slot" data-icone="recherche"></span>
+          <input type="search" id="param-recherche" placeholder="Rechercher un paramètre" autocomplete="off" aria-label="Rechercher un paramètre">
+        </div>
+        <div id="param-liste" class="params"></div>
+        <p class="etat-vide" id="param-vide"></p>
+
+        <h2>Console</h2>
+        <div id="console" class="console" role="log" aria-live="off"></div>
+        <form class="console-saisie" autocomplete="off">
+          <input id="console-texte" type="text" placeholder="mode chien, param v_max 0.4, infos…" aria-label="Commande texte" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button type="submit" class="bouton plein">Envoyer</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ===== Partage ===== -->
+    <section id="vue-partage" class="vue defilant" aria-label="Partage">
+      <div class="page page-centree">
+        <h1>Partager l'application</h1>
+        <p class="aide">Faites scanner ce code pour ouvrir la télécommande sur un autre téléphone.</p>
+        <div class="qr-cadre"><canvas id="qr-canvas" aria-label="QR code de l'adresse de la page"></canvas></div>
+        <p class="adresse chiffres" id="qr-adresse"></p>
+        <div class="rangee-boutons centre">
+          <button type="button" class="bouton" id="btn-copier"><span class="ico-slot" data-icone="copier"></span>Copier l'adresse</button>
+          <button type="button" class="bouton" id="btn-partager" hidden><span class="ico-slot" data-icone="envoyer"></span>Partager</button>
+          <button type="button" class="bouton plein" id="btn-installer" hidden><span class="ico-slot" data-icone="installer"></span>Installer l'application</button>
+        </div>
+        <p class="aide petit" id="partage-hors-ligne">Une fois la page ouverte, elle fonctionne aussi sans connexion internet.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Arrêt d'urgence : toujours visible ===== -->
+  <button id="urgence" class="urgence" type="button" aria-label="Arrêt d'urgence" data-etat="libre">
+    <span class="urgence-progres" aria-hidden="true"></span>
+    <span class="urgence-contenu">
+      <span class="urgence-ico" data-icone="urgence"></span>
+      <span class="urgence-textes">
+        <span class="urgence-titre" id="urgence-titre">Arrêt d'urgence</span>
+        <span class="urgence-sous" id="urgence-sous">Toucher pour tout arrêter</span>
+      </span>
+    </span>
+  </button>
+
+  <div id="voile" class="voile" hidden></div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <!-- ===== Fenêtre de connexion ===== -->
+  <dialog id="dlg-connexion" class="feuille" aria-labelledby="cx-titre">
+    <div class="feuille-tete">
+      <h2 id="cx-titre">Se connecter</h2>
+      <button type="button" class="btn-icone" id="cx-fermer" aria-label="Fermer"></button>
+    </div>
+    <p class="alerte-boite" id="cx-sans-ble" hidden>Ce navigateur ne gère pas le Bluetooth web (iPhone, Firefox…). Ouvrez la page dans Chrome sur Android, ou essayez la démo.</p>
+    <button type="button" class="choix" id="cx-ble">
+      <span class="choix-ico" data-icone="bluetooth"></span>
+      <span class="choix-textes"><strong>Rover en Bluetooth</strong><small>Chrome sur Android ou sur ordinateur</small></span>
+    </button>
+    <form class="choix choix-ws" id="cx-ws-form">
+      <span class="choix-ico" data-icone="reseau"></span>
+      <span class="choix-textes">
+        <strong>Simulateur sur ordinateur</strong>
+        <small>Adresse du simulateur (WebSocket)</small>
+        <span class="champ-ligne">
+          <input id="cx-ws" type="text" inputmode="url" placeholder="192.168.1.20 ou ws://localhost:8765/ws" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Adresse WebSocket du simulateur">
+          <button type="submit" class="bouton plein">Connecter</button>
+        </span>
+        <small class="avertir" id="cx-ws-note" hidden>Une page en https n'accepte que ws://localhost ou wss://.</small>
+      </span>
+    </form>
+    <button type="button" class="choix choix-demo" id="cx-demo">
+      <span class="choix-ico" data-icone="demo"></span>
+      <span class="choix-textes"><strong>Démo, sans rover</strong><small>Un rover simulé dans la page : pièce, murs, sonar, carte</small></span>
+    </button>
+    <button type="button" class="bouton discret-bouton" id="cx-deconnecter" hidden>Se déconnecter</button>
+  </dialog>
+
+  <!-- ===== Journal ===== -->
+  <dialog id="dlg-journal" class="feuille" aria-labelledby="jr-titre">
+    <div class="feuille-tete">
+      <h2 id="jr-titre">Journal</h2>
+      <button type="button" class="bouton" id="jr-effacer">Effacer</button>
+      <button type="button" class="btn-icone" id="jr-fermer" aria-label="Fermer"></button>
+    </div>
+    <ul id="journal-liste" class="journal"></ul>
+    <p class="etat-vide" id="journal-vide">Rien à signaler pour l'instant.</p>
+  </dialog>
+</div>
+
+<script type="module" src="js/app.js"></script>
+<noscript><p style="padding:24px;color:#fff;background:#07080d">RoverOS a besoin de JavaScript.</p></noscript>
+</body>
+</html>

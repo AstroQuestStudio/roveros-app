@@ -1,0 +1,11 @@
+{
+  "name": "roveros-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Télécommande web RoverOS (site statique, aucune compilation).",
+  "scripts": {
+    "test": "node --test tests/",
+    "icones": "node outils/generer-icones.mjs"
+  }
+}
