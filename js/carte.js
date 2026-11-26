@@ -656,6 +656,28 @@ export class VueCarte extends EventTarget {
     }
   }
 
+  /** Points de la patrouille : des pastilles numérotées reliées en boucle par un pointillé discret. */
+  _dessinerEtapes() {
+    const { ctx, etapes } = this;
+    if (!etapes.length) return;
+    const pts = etapes.map((p) => this.versEcran(p.x, p.y));
+    ctx.save();
+    if (pts.length > 1) {
+      ctx.strokeStyle = 'rgba(233, 242, 247, 0.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 6]);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      if (pts.length > 2) ctx.closePath(); // en boucle : le dernier point retourne au premier
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.font = '600 13px Geist, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    pts.forEach(([px, py], i) => {
+      ctx.fillStyle = 'rgba(5, 11, 18, 0.85)'; ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = COULEURS.sonar; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.fillStyle = '#e9f2f7'; ctx.fillText(String(i + 1), px, py + 0.5);
+    });
+    ctx.restore();
+  }
+
   _dessinerMarqueur() {
     const { ctx, marqueur } = this;
     if (!marqueur) return;
