@@ -20,7 +20,7 @@ import {
 } from './protocole.js';
 import { RAYON_CIRCONSCRIT, LARGEUR_ROVER, positionSonar } from './gabarit.js';
 
-export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'arret'];
+export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'patrouille', 'arret'];
 
 const CELLULE = 0.06; // taille d'une case de la carte, en mètres (la carte couvre ±1,92 m)
 const RAYON = RAYON_CIRCONSCRIT; // cercle qui entoure le châssis réel (25 × 20 cm : voir gabarit.js)
@@ -157,6 +157,9 @@ export class FauxRover {
     this.garde = false;
     this.tReplan = 0;
     this.cibleVue = false;
+    this.veilleS = 0; // délai avant la semi-veille, en secondes (0 = jamais)
+    this.veille = false;
+    this.tOrdre = 0; // heure du dernier ordre reçu
   }
 
   // ===== Entrées : ordres du téléphone =====
@@ -176,6 +179,8 @@ export class FauxRover {
       default: break;
     }
     if (this.urgence) { this.err("arrêt d'urgence actif : ordre refusé"); return; }
+    this.tOrdre = this.t;
+    if (this.veille) { this.veille = false; this.evt('réveil'); }
     switch (ordre.type) {
       case 'manette':
         if (this.mode !== 'manuel' || this.but) this.annuler();
@@ -214,6 +219,14 @@ export class FauxRover {
         break;
       }
       case 'infos': this.envoyerInfos(); break;
+      case 'veille': {
+        const v = Number(args[0]);
+        if (Number.isFinite(v) && v >= 0) { this.veilleS = v; this.evt(v > 0 ? `veille après ${v} s` : 'veille désactivée'); } else this.err('veille : nombre de secondes attendu');
+        break;
+      }
+      case 'materiel':
+        this.texte('materiel cycles=' + Math.round(this.t * 100) + ' calcul=700 calcul_max=2000 duree_max=2300 retards=0 err_driver=0 err_centrale=0 mem=73728');
+        break;
       default: this.err(`commande inconnue : ${mot}`);
     }
   }
@@ -250,6 +263,15 @@ export class FauxRover {
     if (nom === 'chien') { this.cible = { ...this.monde.ronde[0] }; this.idxRonde = 1; this.radar = 'suivi'; }
     if (nom === 'explorer') { this.etat.phase = 'scan'; this.etat.tPhase = this.t; this.etat.echecs = []; this.radar = 'auto'; }
     if (nom === 'base') this.allerA(0, 0, true);
+    if (nom === 'patrouille') {
+      const nombres = args.map(Number).filter(Number.isFinite);
+      const points = [];
+      for (let i = 0; i + 1 < nombres.length && points.length < 6; i += 2) points.push({ x: nombres[i], y: nombres[i + 1] });
+      if (points.length === 0) { this.err('patrouille : donnez au moins un point (x y en mètres)'); this.annuler(); return; }
+      this.etat.points = points; this.etat.i = 0;
+      this.evt(`patrouille de ${points.length} point${points.length > 1 ? 's' : ''}`);
+      return;
+    }
     if (nom === 'carre' || nom === 'glisse') this.etat.etapes = this.etapesFigure(nom);
     if (nom === 'mur') this.etat.phase = 'cherche';
     this.evt(`mode ${nom}`);
@@ -280,8 +302,8 @@ export class FauxRover {
     return etapes;
   }
 
-  allerA(x, y, base = false) {
-    if (!base) this.annuler();
+  allerA(x, y, base = false, garder = false) {
+    if (!base && !garder) this.annuler();
     const lim = (TAILLE_CARTE / 2) * CELLULE - 0.03;
     this.but = { x: limiter(x, -lim, lim), y: limiter(y, -lim, lim), base };
     this.tReplan = -10;
@@ -478,6 +500,10 @@ export class FauxRover {
     const vmax = this.params.v_max.v * (this.vitessePct / 100);
     const nul = { vx: 0, vy: 0, w: 0 };
     const tm = this.t - this.etat.t0; // temps écoulé dans le comportement
+    if (this.mode === 'patrouille' && !this.but) {
+      const p = this.etat.points[this.etat.i];
+      this.allerA(p.x, p.y, false, true);
+    }
     // --- Aller en un point (toucher sur la carte) ou retour à la base ---
     if (this.but) {
       if (this.t - this.tAller > 90) { this.err('trop long : abandon'); this.annuler(); return nul; }
@@ -485,6 +511,14 @@ export class FauxRover {
       if (this.tObstacle > 7) { this.err('bloqué par un obstacle'); this.annuler(); return nul; }
       const cmd = this.poursuivre(this.but, vmax);
       if (!cmd) { this.err('pas de chemin vers ce point'); this.annuler(); return nul; }
+      // En patrouille, 12 cm suffisent : un point trop près d'un obstacle n'arrêterait pas la boucle.
+      if (this.mode === 'patrouille' && !cmd.fini && Math.hypot(this.but.x - this.x, this.but.y - this.y) < 0.12) cmd.fini = true;
+      if (cmd.fini && this.mode === 'patrouille') {
+        this.evt(`point ${this.etat.i + 1} atteint`);
+        this.etat.i = (this.etat.i + 1) % this.etat.points.length; // on repart au premier point : patrouille en boucle
+        this.but = null;
+        return nul;
+      }
       if (cmd.fini) {
         this.tArrive = this.t;
         this.evt(this.but.base ? 'de retour à la base' : 'arrivé');
@@ -620,7 +654,10 @@ export class FauxRover {
     let cmd = this.calculerCommande(dt);
     cmd = this.appliquerSecurites(cmd);
     this.integrer(cmd, dt);
-    this.balayerSonar(dt);
+    const repos = this.mode === 'manuel' && !this.but && Math.hypot(this.vxb, this.vyb) < 0.01 && Math.abs(this.w) < 0.02;
+    if (this.veilleS > 0 && !this.veille && repos && this.t - this.tOrdre > this.veilleS) { this.veille = true; this.evt('veille : tête et moteurs au repos'); }
+    if (this.veille && !repos) { this.veille = false; this.evt('réveil'); }
+    if (!this.veille) this.balayerSonar(dt);
     this.tension = Math.max(5.5, this.tension - 0.0006 * dt * (1 + 3 * Math.hypot(this.vxb, this.vyb)));
     // Cadences d'émission : ÉTAT 10 Hz, POINTS 10 Hz, CARTE 4 Hz.
     this.cpt.etat += dt; this.cpt.points += dt; this.cpt.carte += dt;
@@ -772,7 +809,7 @@ export class FauxRover {
     }
     this.sortie(encoderEtat({
       x: this.x * 1000, y: this.y * 1000, cap: degres(this.cap), drapeaux: this.drapeaux(),
-      comportement: this.but && !this.but.base ? 0 : Math.max(0, MODES.indexOf(this.mode)),
+      comportement: this.but && !this.but.base && this.mode === 'manuel' ? 0 : Math.max(0, MODES.indexOf(this.mode)),
       tension: this.tension + (this.alea() - 0.5) * 0.04, tete: this.tete, sonar: this.dernierEcho,
       cibleGis, cibleD, libre: this.libreCm ?? 255,
       vitesse: (this.vitesseReelle ?? 0) * 100,

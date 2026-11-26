@@ -30,6 +30,8 @@ export const T = {
   CHEMIN: 0x84,
   TEXTE_ROVER: 0x85,
   PONG: 0x91,
+  // mise à jour du firmware (0xA0) : elle se fait depuis le PC, l'application ignore ces trames
+  MAJ: 0xA0,
 };
 
 /** La carte fait 64 × 64 cases. */
@@ -152,6 +154,7 @@ export function decoder(donnees) {
       case T.CHEMIN: return decoderChemin(o, vue);
       case T.TEXTE_ROVER: return { type: 'texte', texte: decodeurTexte.decode(o.subarray(1)).replace(/[\r\n]+$/, '') };
       case T.PONG: return o.length >= 2 ? { type: 'pong', n: o[1] } : null;
+      case T.MAJ: return { type: 'maj' }; // ignorée proprement (jamais une erreur, jamais de texte)
       default: return { type: 'inconnu', code: o[0], longueur: o.length };
     }
   } catch {
@@ -261,7 +264,7 @@ export function analyserCles(texte) {
 
 /**
  * Analyse une ligne de texte envoyée par le rover.
- * Renvoie { genre, ... } avec genre ∈ info | modes | param | evt | err | calib | autre.
+ * Renvoie { genre, ... } avec genre ∈ info | modes | param | evt | err | calib | materiel | autre.
  */
 export function analyserLigne(ligne) {
   const texte = String(ligne ?? '').trim();
@@ -271,6 +274,7 @@ export function analyserLigne(ligne) {
   switch (mot) {
     case 'info': return { genre: 'info', valeurs: analyserCles(reste), texte };
     case 'calib': return { genre: 'calib', valeurs: analyserCles(reste), texte };
+    case 'materiel': return { genre: 'materiel', valeurs: analyserCles(reste), texte };
     case 'modes': return { genre: 'modes', modes: reste.split(',').map((s) => s.trim()).filter(Boolean), texte };
     case 'evt': return { genre: 'evt', message: reste, texte };
     case 'err': return { genre: 'err', message: reste, texte };

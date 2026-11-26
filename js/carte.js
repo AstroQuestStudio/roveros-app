@@ -10,6 +10,7 @@
 import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, appliquerCarte } from './protocole.js';
 import { LARGEUR_ROVER, LONGUEUR_ROVER, positionSonar } from './gabarit.js';
 import { Trace } from './trace.js';
+import { Lisseur } from './lissage.js';
 
 // Palette de la carte (mêmes tons que l'interface : encre, eau, sable, turquoise du sonar, ambre du rover).
 const COULEURS = {
@@ -60,6 +61,9 @@ export class VueCarte extends EventTarget {
     this.sale = true; // la couche doit être recalculée
     this.invalide = true; // il faut redessiner (on ne redessine rien quand rien ne change)
     this.rover = { x: 0, y: 0, cap: 0, tete: 0, sonar: 0, ok: false }; // mètres, radians
+    this.lisseur = new Lisseur(); // fait glisser le rover entre deux trames ÉTAT (8 à 20 par seconde)
+    this.lissage = true; // mettre false pour afficher les positions telles qu'elles arrivent (mesures)
+    this.stats = { images: 0, dessinMs: 0, depuis: performance.now() };
     this.trace = new Trace(); // l'historique des positions annoncées par le rover (2 000 points, un tous les 2 cm)
     this.couches = { carte: true, trace: true, echos: true, chemin: true, base: true }; // ce qui est dessiné
     this.echos = [];
@@ -93,14 +97,22 @@ export class VueCarte extends EventTarget {
     const r = this.rover;
     const memo = `${e.x},${e.y},${e.cap},${e.tete},${e.sonar},${e.cibleD},${e.cibleGis}`;
     if (memo !== this._memoEtat) { this._memoEtat = memo; this.invalide = true; }
-    r.x = e.x / 1000; r.y = e.y / 1000; r.cap = (e.cap * Math.PI) / 180;
-    r.tete = (e.tete * Math.PI) / 180; r.sonar = e.sonar; r.ok = true;
-    if (this.trace.ajouter(r.x, r.y) && this.couches.trace) this.invalide = true;
+    const x = e.x / 1000; const y = e.y / 1000;
+    const cap = (e.cap * Math.PI) / 180; const tete = (e.tete * Math.PI) / 180;
+    r.sonar = e.sonar;
+    // Avec le lissage, c'est la boucle d'affichage qui déplace le rover image par image (voir _appliquerLissage).
+    // Sans lui, ou quand la carte n'est pas à l'écran, on prend la position telle qu'elle arrive.
+    if (!r.ok || !this.lissage || !this.actif) {
+      r.x = x; r.y = y; r.cap = cap; r.tete = tete;
+      if (this.trace.ajouter(x, y) && this.couches.trace) this.invalide = true;
+    }
+    r.ok = true;
+    if (this.lissage) this.lisseur.pousser({ x, y, cap: e.cap, tete: e.tete }, performance.now());
     if (e.cibleD > 0) {
-      const a = r.cap + (e.cibleGis * Math.PI) / 180;
-      this.cible = { x: r.x + Math.sin(a) * (e.cibleD / 100), y: r.y + Math.cos(a) * (e.cibleD / 100) };
+      const a = cap + (e.cibleGis * Math.PI) / 180;
+      this.cible = { x: x + Math.sin(a) * (e.cibleD / 100), y: y + Math.cos(a) * (e.cibleD / 100) };
     } else this.cible = null;
-    if (this.marqueur && Math.hypot(this.marqueur.x - r.x, this.marqueur.y - r.y) < 0.1) this.marqueur = null;
+    if (this.marqueur && Math.hypot(this.marqueur.x - x, this.marqueur.y - y) < 0.1) this.marqueur = null;
   }
 
   ajouterPoints(points) {
@@ -117,7 +129,7 @@ export class VueCarte extends EventTarget {
   retirerMarqueur() { this.marqueur = null; this.invalide = true; }
 
   /** Après « recaler » : nouvelle origine, tout l'historique géométrique est caduc. */
-  reinitialiserTrajet() { this.trace.effacer(); this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
+  reinitialiserTrajet() { this.lisseur.reinitialiser(); this.trace.effacer(); this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
 
   // ---------- Vue ----------
 
@@ -243,13 +255,30 @@ export class VueCarte extends EventTarget {
   _boucle(t) {
     if (!this.actif) return;
     requestAnimationFrame(this._boucle);
-    if (document.hidden || t - this._dernier < 30) return; // ~30 images par seconde au plus
-    // Économie : on ne redessine que si quelque chose a changé ou s'anime (échos, marqueur, suivi).
-    const anime = this.echos.length > 0 || this.marqueur !== null || (this.suivre && this.rover.ok && this._ecartSuivi() > 0.0005);
+    if (document.hidden) return;
+    const maintenant = performance.now();
+    const glisse = this._appliquerLissage(maintenant);
+    // Économie : on ne redessine que si quelque chose a changé ou s'anime (rover qui glisse, échos, marqueur, suivi).
+    const anime = glisse || this.echos.length > 0 || this.marqueur !== null || (this.suivre && this.rover.ok && this._ecartSuivi() > 0.0005);
     if (!this.invalide && !anime) return;
     this._dernier = t;
     this.invalide = false;
+    const t0 = performance.now();
     this.dessiner();
+    this.stats.images++;
+    this.stats.dessinMs += performance.now() - t0;
+  }
+
+  /** Place le rover affiché (position, cap, tête du sonar) à l'endroit interpolé pour cette image. Vrai s'il glisse. */
+  _appliquerLissage(maintenant) {
+    if (!this.lissage) return false;
+    const a = this.lisseur.lire(maintenant);
+    if (!a) return false;
+    const r = this.rover;
+    const avant = r.x + r.y + r.cap + r.tete;
+    r.x = a.x; r.y = a.y; r.cap = (a.cap * Math.PI) / 180; r.tete = (a.tete * Math.PI) / 180;
+    if (this.trace.ajouter(r.x, r.y) && this.couches.trace) this.invalide = true; // la trace suit le rover affiché
+    return this.lisseur.actif(maintenant) || avant !== r.x + r.y + r.cap + r.tete;
   }
 
   _ecartSuivi() {
@@ -275,9 +304,12 @@ export class VueCarte extends EventTarget {
 
   dessiner() {
     const { ctx, largeur: W, hauteur: H, vue } = this;
+    const maintenant = performance.now();
+    const k = 1 - Math.exp(-Math.min(100, maintenant - (this._tDessin ?? maintenant - 16)) / 60); // même glissement à 30 ou 60 images/s
+    this._tDessin = maintenant;
     if (this.suivre && this.rover.ok) {
-      vue.cx += (this.rover.x - vue.cx) * 0.2;
-      vue.cy += (this.rover.y - this.decalage * H / vue.ppm - vue.cy) * 0.2;
+      vue.cx += (this.rover.x - vue.cx) * k;
+      vue.cy += (this.rover.y - this.decalage * H / vue.ppm - vue.cy) * k;
     }
     if (this.sale) this._majCouche();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);

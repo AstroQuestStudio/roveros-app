@@ -38,7 +38,7 @@ export function directionMot(commande) {
  * La phrase qui explique l'état du rover.
  * @param e  trame ÉTAT décodée (flags, libre en cm, vitesse en cm/s, comportement…) ou null
  * @param ctx { liaison: 'connecte'|…, commande: {vx,vy,w} (ce que l'utilisateur demande, en %),
- *              urgenceApp: bool, mode: nom du comportement en cours ('' si manuel), securites: bool (obstacles actifs) }
+ *              urgenceApp: bool, mode: nom du comportement en cours ('' si manuel), veille: bool (semi-veille du rover) }
  * @returns {{ texte: string, niveau: 'neutre'|'ok'|'info'|'alerte'|'danger', cle: string }}
  */
 export function phraseEtat(e, ctx = {}) {
@@ -77,6 +77,7 @@ export function phraseEtat(e, ctx = {}) {
   if (f.arrive) return { texte: 'Arrivé à destination', niveau: 'ok', cle: 'arrive' };
   if (ctx.mode) return { texte: `${ctx.mode} en cours`, niveau: 'info', cle: 'mode' };
   if (f.mouvement || e.vitesse > 2) return { texte: 'En mouvement', niveau: 'ok', cle: 'mouvement' };
+  if (ctx.veille) return { texte: 'En veille', niveau: 'neutre', cle: 'veille' }; // tête et moteurs au repos, jusqu'au réveil
   return { texte: 'Prêt à rouler', niveau: 'ok', cle: 'pret' };
 }
 
