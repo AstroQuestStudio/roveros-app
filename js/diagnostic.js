@@ -38,7 +38,8 @@ export function directionMot(commande) {
  * La phrase qui explique l'état du rover.
  * @param e  trame ÉTAT décodée (flags, libre en cm, vitesse en cm/s, comportement…) ou null
  * @param ctx { liaison: 'connecte'|…, commande: {vx,vy,w} (ce que l'utilisateur demande, en %),
- *              urgenceApp: bool, mode: nom du comportement en cours ('' si manuel), veille: bool (semi-veille du rover) }
+ *              urgenceApp: bool, mode: nom du comportement en cours ('' si manuel), veille: bool (semi-veille du rover),
+ *              restant: distance (m) qui reste jusqu'au point touché sur la carte (null si aucun « aller »), formaterDistance }
  * @returns {{ texte: string, niveau: 'neutre'|'ok'|'info'|'alerte'|'danger', cle: string }}
  */
 export function phraseEtat(e, ctx = {}) {
@@ -74,7 +75,13 @@ export function phraseEtat(e, ctx = {}) {
   if (f.patine) return { texte: 'Les roues patinent : le rover glisse', niveau: 'alerte', cle: 'patine' };
   if (f.batterie) return { texte: 'Batterie faible : rechargez bientôt', niveau: 'alerte', cle: 'batterie' };
   if (f.retard) return { texte: 'Le rover est surchargé : commandes en retard', niveau: 'alerte', cle: 'retard' };
+  const fmt = ctx.formaterDistance ?? ((m) => `${Math.round(m * 100)} cm`);
+  if (f.arrive && ctx.restant != null && ctx.restant > 0.3) {
+    // le rover dit « arrivé » alors qu'il n'est pas sur la cible (par exemple au bord de sa carte) : on le dit
+    return { texte: `Il se dit arrivé, mais le point est encore à ${fmt(ctx.restant)}`, niveau: 'alerte', cle: 'arrive-faux' };
+  }
   if (f.arrive) return { texte: 'Arrivé à destination', niveau: 'ok', cle: 'arrive' };
+  if (ctx.restant != null) return { texte: `En route : ${fmt(ctx.restant)} jusqu'au point`, niveau: 'info', cle: 'aller' };
   if (ctx.mode) return { texte: `${ctx.mode} en cours`, niveau: 'info', cle: 'mode' };
   if (f.mouvement || e.vitesse > 2) return { texte: 'En mouvement', niveau: 'ok', cle: 'mouvement' };
   if (ctx.veille) return { texte: 'En veille', niveau: 'neutre', cle: 'veille' }; // tête et moteurs au repos, jusqu'au réveil

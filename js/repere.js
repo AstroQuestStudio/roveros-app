@@ -38,7 +38,11 @@ export class Repere {
     this.ox = ox; this.oy = oy; this.version = version; this.recu = true;
     if (cellule > 0) this.cellule = cellule / 1000;
     const change = !premiere && (ox !== avant.ox || oy !== avant.oy);
-    return { change, decalageCases: premiere ? { dx: 0, dy: 0 } : { dx: ox - avant.ox, dy: oy - avant.oy } };
+    const dx = premiere ? 0 : ox - avant.ox; const dy = premiere ? 0 : oy - avant.oy;
+    // un décalage normal est de 16 cases ; plus d'une demi-fenêtre d'un coup, c'est un recalage ou une longue absence
+    const saut = !premiere && Math.max(Math.abs(dx), Math.abs(dy)) > DEMI_FENETRE;
+    if (saut) this.anciens.clear();
+    return { change, saut, decalageCases: { dx, dy } };
   }
 
   /** Centre de la fenêtre courante, en mètres absolus. */

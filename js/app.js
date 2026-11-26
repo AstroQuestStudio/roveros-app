@@ -7,7 +7,7 @@ import {
 import { TransportBle, bluetoothDisponible } from './transport-ble.js';
 import { TransportWs, normaliserUrlWs } from './transport-ws.js';
 import { TransportDemo } from './transport-demo.js';
-import { VueCarte } from './carte.js';
+import { VueCarte, formaterDistance } from './carte.js';
 import { Manette, Clavier, Pilote } from './manettes.js';
 import { Inclinaison } from './inclinaison.js';
 import { Reglages } from './reglages.js';
@@ -19,6 +19,7 @@ import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
 import { commandesVitesse, limiterVitesse } from './vitesse.js';
 import { MesureLatence } from './latence.js';
 import { Patrouille, MAX_POINTS, MIN_POINTS } from './patrouille.js';
+import { PORTEE_ALLER_MAX } from './repere.js';
 import { phraseMateriel, materielInquietant } from './materiel.js';
 
 const $ = (sel, racine = document) => racine.querySelector(sel);
@@ -168,8 +169,11 @@ function allerAuPoint(x, y) {
   }
   if (S.urgence.actif) { afficherToast('err', "Arrêt d'urgence actif : déverrouillez-le pour bouger"); return; }
   if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
+  const rel = carte.repere.relatif(x, y); // mm relatifs au centre de la fenêtre du rover
+  if (!rel) { afficherToast('err', `Trop loin : ${PORTEE_ALLER_MAX} m au plus`); return; }
   carte.poserMarqueur(x, y);
-  S.transport.envoyer(encoderAller(Math.round(x * 1000), Math.round(y * 1000)));
+  S.cibleAller = { x, y, t: performance.now() }; // pour afficher la distance restante tant que le rover est en route
+  S.transport.envoyer(encoderAller(rel.xMm, rel.yMm));
   noter('app', `Aller vers (${x.toFixed(2)} ; ${y.toFixed(2)}) m`, { toast: false });
 }
 
@@ -202,7 +206,7 @@ function utiliserTransport(transport) {
   S.transport = transport;
   S.modes = []; S.info = {}; S.etat = null;
   reglages.vider();
-  carte.effacerCarte(); carte.reinitialiserTrajet(); carte.rover.ok = false;
+  carte.effacerCarte(); carte.reinitialiserTrajet(); carte.rover.ok = false; S.cibleAller = null; S.posAbsolue = null;
   rendreModes();
   transport.addEventListener('etat', (ev) => { if (S.transport === transport) surEtatLiaison(transport, ev.detail); });
   transport.addEventListener('trame', (ev) => { if (S.transport === transport) surTrame(ev.detail); });
@@ -284,6 +288,7 @@ function surTrame(octets) {
     case 'chemin': carte.definirChemin(m.points); break;
     case 'texte': surLigne(m.texte); break;
     case 'pong': if (latence.surPong(m.n) !== null) afficherDetailLiaison(); break;
+    case 'origine': carte.appliquerOrigine(m); break; // la fenêtre de carte du rover a glissé : tout reste en absolu
     case 'maj': break; // mise à jour du firmware (0xA0) : elle se fait depuis le PC, on ignore
     default: break; // type inconnu : on l'ignore sans bruit
   }
@@ -294,7 +299,7 @@ function surEtat(e) {
   S.etat = e;
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
-  if (S.vue === 'bord') bord.majEtat(e, S.modes);
+  if (S.vue === 'bord') bord.majEtat(e, S.modes, carte.positionAbsolue(e) ?? undefined);
   if (e.rssi) poserDonnee($('#liaison-signal'), 'barres', barresSignal(e.rssi));
   if (!precedent || Math.abs((precedent.tension) - e.tension) >= 0.1 || precedent.flags.batterie !== e.flags.batterie) majBatterieEntete(e);
   const nomMode = e.comportement === 0 && !carte.chemin.length ? 'Manuel' : (S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : e.comportement === 0 ? 'En route' : `Mode ${e.comportement}`);
@@ -326,7 +331,22 @@ function contexteEtat() {
     urgenceApp: S.urgence.actif,
     mode: nomMode,
     veille: S.veille,
+    restant: distanceRestante(),
+    formaterDistance,
   };
+}
+
+/** Distance (m) entre le rover et le point touché tant qu'un « aller » est en cours, sinon null. */
+function distanceRestante() {
+  const c = S.cibleAller; const e = S.etat;
+  if (!c || !e) return null;
+  const pos = carte.positionAbsolue(e);
+  if (!pos) return null;
+  const d = Math.hypot(c.x - pos.x, c.y - pos.y);
+  // arrivé pour de bon, repris à la manette, ou abandonné (plus de chemin, à l'arrêt depuis un moment) : on n'affiche plus rien
+  const abandonne = performance.now() - c.t > 4000 && !carte.chemin.length && e.vitesse < 2 && !e.flags.mouvement;
+  if ((e.flags.arrive && d < 0.3) || d < 0.12 || abandonne || pilote.sortie.vx || pilote.sortie.vy || pilote.sortie.w) { S.cibleAller = null; return null; }
+  return d;
 }
 
 function afficherLigne(ligne) {
@@ -350,21 +370,25 @@ const APRES_RECALAGE_MS = 30000;
 let minuterieRecalage = null;
 
 function majPosition(e, precedent) {
-  const x = e.x / 1000; const y = e.y / 1000;
+  const pos = carte.positionAbsolue(e);
+  if (!pos) return; // trame écrite dans un repère inconnu : on garde l'affichage précédent
+  const { x, y } = pos;
   const fmt = (v) => v.toFixed(2).replace('.', ',');
   const distBase = Math.hypot(x, y);
   poserTexte($('#bar-pos'), `${fmt(x)} ; ${fmt(y)} m`);
   $('.stat-cap').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${Math.round(e.cap)}° (base à ${fmt(distBase)} m)`;
   // Position et carte brusquement remises à zéro sans que nous l'ayons demandé : le rover a été reposé.
-  if (precedent && !S.recalageVoulu) {
-    const saut = Math.hypot(precedent.x / 1000, precedent.y / 1000);
-    if (saut > 0.3 && distBase < 0.03 && Math.abs(e.cap) < 3) signalerRecalage('Le rover a remis sa position à zéro');
+  const avant = S.posAbsolue;
+  S.posAbsolue = pos;
+  if (avant && !S.recalageVoulu) {
+    const saut = Math.hypot(avant.x, avant.y);
+    if (saut > 0.3 && distBase < 0.03 && Math.abs(e.cap) < 3 && precedent) signalerRecalage('Le rover a remis sa position à zéro');
   }
 }
 
 /** Le rover a remis sa position et sa carte à zéro (pris en main, ou recalé) : tout ce qu'on affichait est caduc. */
 function signalerRecalage(message) {
-  carte.effacerCarte(); carte.reinitialiserTrajet();
+  carte.effacerCarte(); carte.reinitialiserTrajet(); S.cibleAller = null; S.posAbsolue = null;
   const chip = $('#info-perdu');
   chip.hidden = false;
   poserTexte(chip, `Position remise à zéro à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`);
@@ -950,7 +974,7 @@ function allerA(nom) {
   fermerMenusFlottants();
   if (patrouille.actif && nom !== 'carte') { patrouille.actif = false; $('#patrouille').hidden = true; majPatrouille(); }
   if (section === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
-  if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes); } else bord.arreter();
+  if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes, carte.positionAbsolue(S.etat) ?? undefined); } else bord.arreter();
   if (nom === 'partage') montrerPartage();
   if (nom === 'reglages' && S.transport?.connecte && reglages.params.size === 0) envoyerTexte('params', { silencieux: true });
 }
@@ -1102,7 +1126,7 @@ if (simUrl) {
   const url = normaliserUrlWs(simUrl);
   if (url) utiliserTransport(new TransportWs(url)); else afficherToast('err', `Adresse « ${simUrl} » invalide`);
 } else if (parametres.has('demo')) {
-  utiliserTransport(new TransportDemo());
+  utiliserTransport(new TransportDemo({ monde: parametres.get('demo') === 'couloir' ? 'couloir' : 'salle' }));
 } else {
   setTimeout(ouvrirConnexion, 350); // première visite : on propose tout de suite de se connecter
 }

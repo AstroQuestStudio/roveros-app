@@ -122,3 +122,19 @@ test('sécurités : état lu dans les paramètres réels du rover', () => {
   assert.equal(etatSecurites(p(0, 1)), 'partielles');
   assert.equal(etatSecurites(new Map()), 'inconnu');
 });
+
+test('aller : la distance restante est affichée tant que le rover est en route ; « arrivé » à tort est dit clairement', () => {
+  const e = etat({}, { vitesse: 20 });
+  const fmt = (m) => `${m.toFixed(1).replace('.', ',')} m`;
+  const enRoute = phraseEtat(e, ctx({ restant: 2.4, formaterDistance: fmt }));
+  assert.equal(enRoute.texte, "En route : 2,4 m jusqu'au point");
+  assert.equal(enRoute.cle, 'aller');
+  // le rover annonce « arrivé » alors qu'il reste 1,8 m (il est au bord de sa carte)
+  const faux = phraseEtat(etat({ arrive: true }), ctx({ restant: 1.8, formaterDistance: fmt }));
+  assert.equal(faux.texte, 'Il se dit arrivé, mais le point est encore à 1,8 m');
+  assert.equal(faux.niveau, 'alerte');
+  // vraiment arrivé (ou plus d'aller en cours) : le message normal
+  assert.equal(phraseEtat(etat({ arrive: true }), ctx({ restant: 0.1, formaterDistance: fmt })).texte, 'Arrivé à destination');
+  assert.equal(phraseEtat(etat({ arrive: true }), ctx({ restant: null })).texte, 'Arrivé à destination');
+  assert.equal(phraseEtat(etat(), ctx({ restant: null })).cle, 'pret');
+});

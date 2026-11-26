@@ -7,8 +7,10 @@ import { FauxRover } from './faux-rover.js';
 const PAS_MS = 50; // le faux rover avance par pas de 50 ms (20 Hz)
 
 export class TransportDemo extends Transport {
-  constructor() {
+  /** @param {object} o  monde : 'salle' (3 m) ou 'couloir' (12 m, carte sans limite) */
+  constructor({ monde = 'salle' } = {}) {
     super('demo');
+    this.monde = monde;
     this.rover = null;
     this._horloge = null;
     this._dernier = 0;
@@ -18,6 +20,7 @@ export class TransportDemo extends Transport {
   async connecter() {
     this._changerEtat('connexion', 'Démarrage du rover simulé…');
     this.rover = new FauxRover({
+      monde: this.monde, fenetre: this.monde === 'couloir', // le couloir essaie la fenêtre de carte glissante
       // Les trames du faux rover arrivent comme celles d'un vrai, avec un tout petit délai.
       sortie: (trame) => queueMicrotask(() => { if (this.etat === 'connecte') this._recevoir(trame); }),
       planifier: (fn, ms) => setTimeout(() => { if (this.etat === 'connecte') fn(); }, ms),

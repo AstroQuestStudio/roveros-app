@@ -40,7 +40,7 @@ test('repère : la fenêtre glisse — le même point absolu se lit avec le nouv
   const r = new Repere();
   r.appliquer({ ox: -32, oy: -32, version: 0, cellule: 50 });
   const glisse = r.appliquer({ ox: -16, oy: -48, version: 2, cellule: 50 }); // +16 cases en x, −16 en y
-  assert.deepEqual(glisse, { change: true, decalageCases: { dx: 16, dy: -16 } });
+  assert.deepEqual(glisse, { change: true, saut: false, decalageCases: { dx: 16, dy: -16 } });
   const c = r.centre();
   proche(c.x, 0.8); proche(c.y, -0.8);
   // un rover à 10 cm à droite du nouveau centre est à x = 0,9 m dans le monde
@@ -79,6 +79,15 @@ test('repère : « aller ici » refusé à plus de 30 m du centre de la fenêtre
   assert.equal(r.relatif(25, 35), null, 'toujours trop loin du centre (35 m)');
   assert.deepEqual(r.relatif(40, 0), { xMm: 20000, yMm: 0 });
   assert.equal(r.relatif(0, 0).xMm, -20000, 'la base, à 20 m du centre, reste joignable');
+});
+
+test("repère : un décalage de plus d'une demi-fenêtre d'un coup est un recalage (nouveau repère), pas un glissement", () => {
+  const r = new Repere();
+  r.appliquer({ ox: -32, oy: -32, version: 0, cellule: 50 });
+  assert.equal(r.appliquer({ ox: -16, oy: -32, version: 2, cellule: 50 }).saut, false);
+  assert.equal(r.appliquer({ ox: 0, oy: -32, version: 4, cellule: 50 }).saut, false);
+  assert.equal(r.appliquer({ ox: 16, oy: -32, version: 6, cellule: 50 }).saut, false);
+  assert.equal(r.appliquer({ ox: -32, oy: -32, version: 8, cellule: 50 }).saut, true, 'retour au départ après 2,4 m : le rover a été recalé');
 });
 
 test('repère : retour au départ (recalage) remet l\'origine en −32, −32', () => {

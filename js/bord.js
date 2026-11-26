@@ -38,7 +38,7 @@ export class TableauDeBord {
   }
 
   /** Met à jour tous les compteurs à partir d'une trame ÉTAT décodée. `modes` = liste des comportements. */
-  majEtat(e, modes) {
+  majEtat(e, modes, pos = { x: e.x / 1000, y: e.y / 1000 }) { // pos : position absolue en mètres (la carte glisse avec le rover)
     const el = this.el;
     const virgule = (v, n) => v.toFixed(n).replace('.', ',');
     const pct = niveauBatterie(e.tension);
@@ -49,7 +49,7 @@ export class TableauDeBord {
     poserTexte(el.vitesse, e.vitesse);
     poserTexte(el.sonar, e.sonar === 0 ? '—' : e.sonar >= 255 ? '2,5+' : virgule(e.sonar / 100, 2));
     poserTexte(el.cap, Math.round((e.cap + 360) % 360));
-    poserTexte(el.pos, `${virgule(e.x / 1000, 2)} ; ${virgule(e.y / 1000, 2)}`);
+    poserTexte(el.pos, `${virgule(pos.x, 2)} ; ${virgule(pos.y, 2)}`);
     poserTexte(el.libre, e.libre === 255 ? 'inconnue' : `${e.libre} cm`);
     poserTexte(el.cible, e.cibleD > 0 ? `${e.cibleD} cm, ${e.cibleGis > 0 ? '+' : ''}${e.cibleGis}°` : 'aucune');
     poserTexte(el.mode, modes[e.comportement] ? libelleMode(modes[e.comportement]) : (e.comportement === 0 ? 'Manuel' : `Mode n°${e.comportement}`));

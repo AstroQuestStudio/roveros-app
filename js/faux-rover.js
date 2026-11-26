@@ -15,7 +15,7 @@
 // Les distances sont en mètres dans le simulateur, et converties en millimètres dans les trames.
 
 import {
-  assemblerDrapeaux, decoderOrdre, encoderCarte, encoderChemin, encoderEtat, encoderPoints,
+  assemblerDrapeaux, decoderOrdre, encoderCarte, encoderChemin, encoderEtat, encoderPoints, encoderOrigine,
   encoderPong, encoderTexteRover, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
 } from './protocole.js';
 import { RAYON_CIRCONSCRIT, LARGEUR_ROVER, positionSonar } from './gabarit.js';
@@ -58,6 +58,21 @@ function creerMonde() {
   };
 }
 
+/** Un couloir de 12 m (1,4 m de large) avec une caisse et un pilier : pour essayer la carte sans limite. */
+function creerCouloir() {
+  const y0 = -0.5; const y1 = 11.5; const l = 0.7;
+  return {
+    segments: [
+      { ax: -l, ay: y0, bx: -l, by: y1 }, { ax: l, ay: y0, bx: l, by: y1 },
+      { ax: -l, ay: y1, bx: l, by: y1 }, { ax: -l, ay: y0, bx: l, by: y0 },
+      ...boite(-0.55, 4.2, 0.3, 0.5, 0), // une caisse contre le mur gauche
+      ...boite(0.5, 8.5, 0.4, 0.3, 0), // une saillie contre le mur droit
+    ],
+    cercles: [{ x: 0.45, y: 6.4, r: 0.12 }], // un pilier contre le mur droit
+    ronde: [{ x: 0, y: 1.5 }, { x: 0, y: 3 }, { x: 0, y: 6 }, { x: 0, y: 9 }],
+  };
+}
+
 /** Distance du premier obstacle le long d'un rayon (ox, oy) -> (dx, dy) unitaire. Infinity si rien. */
 function lancer(monde, ox, oy, dx, dy) {
   let meilleur = Infinity;
@@ -96,8 +111,6 @@ function distanceObstacle(monde, x, y) {
 
 // ---------- Cases de la carte ----------
 
-const caseDe = (v) => Math.floor(v / CELLULE) + TAILLE_CARTE / 2;
-const centreCase = (i) => (i - TAILLE_CARTE / 2 + 0.5) * CELLULE;
 const dansCarte = (c, l) => c >= 0 && c < TAILLE_CARTE && l >= 0 && l < TAILLE_CARTE;
 
 // Cases à gonfler autour des obstacles pour que le châssis passe : disque de 3 cases (0,18 m).
@@ -126,13 +139,20 @@ export class FauxRover {
    *   planifier(fn, ms)   exécute fn après ms (pour simuler le délai du PONG) ; par défaut, tout de suite
    *   alea()              générateur de nombres entre 0 et 1 (Math.random par défaut)
    */
-  constructor({ sortie, planifier = (fn) => fn(), alea = Math.random } = {}) {
+  constructor({ sortie, planifier = (fn) => fn(), alea = Math.random, fenetre = false, monde = 'salle' } = {}) {
     this.sortie = sortie;
     this.planifier = planifier;
     this.alea = alea;
     this.params = {};
     for (const [nom, [v, min, max]] of Object.entries(DEFAUTS)) this.params[nom] = { v, min, max };
-    this.monde = creerMonde();
+    // Carte sans limite : avec `fenetre`, la grille de 64 × 64 suit le rover (origine annoncée par la trame ORIGINE,
+    // positions envoyées relatives au centre de la fenêtre, carte « par différences »). Sans, c'est un rover non mis à jour.
+    this.fenetre = fenetre;
+    this.ox = -TAILLE_CARTE / 2; this.oy = -TAILLE_CARTE / 2; this.versionOrigine = 0;
+    this.envoye = new Uint8Array(TAILLE_CARTE * TAILLE_CARTE); // ce que le téléphone a déjà reçu de la fenêtre
+    this.aRenvoyer = new Set(); // lignes à renvoyer quoi qu'il arrive (connexion, raz, glissement)
+    this.ligneFond = 0;
+    this.monde = monde === 'couloir' ? creerCouloir() : creerMonde();
     this.t = 0; // temps simulé, secondes
     this.x = 0; this.y = 0; this.cap = 0;
     this.vxb = 0; this.vyb = 0; this.w = 0; // vitesses réelles dans le repère du rover
@@ -163,6 +183,44 @@ export class FauxRover {
     this.tOrdre = 0; // heure du dernier ordre reçu
   }
 
+  // ===== Fenêtre de carte =====
+
+  caseX(v) { return Math.floor(v / CELLULE) - this.ox; }
+  caseY(v) { return Math.floor(v / CELLULE) - this.oy; }
+  centreX(c) { return (c + this.ox + 0.5) * CELLULE; }
+  centreY(l) { return (l + this.oy + 0.5) * CELLULE; }
+  /** Centre de la fenêtre (m, repère du monde) : les positions envoyées sont relatives à ce point. */
+  centreFenetre() { return { x: (this.ox + TAILLE_CARTE / 2) * CELLULE, y: (this.oy + TAILLE_CARTE / 2) * CELLULE }; }
+
+  /** Quand le rover approche du bord (moins de 20 cases), la fenêtre glisse de 16 cases vers ce bord. */
+  recentrerFenetre() {
+    if (!this.fenetre) return;
+    const N = TAILLE_CARTE;
+    const c = this.caseX(this.x); const l = this.caseY(this.y);
+    const dx = c < 20 ? -16 : c > N - 21 ? 16 : 0;
+    const dy = l < 20 ? -16 : l > N - 21 ? 16 : 0;
+    if (!dx && !dy) return;
+    const neuve = new Uint8Array(N * N);
+    for (let ln = 0; ln < N; ln++) {
+      for (let cn = 0; cn < N; cn++) {
+        const co = cn + dx; const lo = ln + dy; // la case de l'ancienne fenêtre qui se retrouve ici
+        if (co >= 0 && co < N && lo >= 0 && lo < N) neuve[ln * N + cn] = this.carte[lo * N + co];
+      }
+    }
+    this.carte = neuve; // ce qui sort de la fenêtre est oublié par le rover ; la bande découverte est « inconnue »
+    this.ox += dx; this.oy += dy;
+    this.versionOrigine = (this.versionOrigine + 2) & 0xfe;
+    this.envoyerOrigine();
+    this.renvoyerTout(); // après un glissement, le cœur renvoie toute la carte
+    this.cheminEnvoye = ''; this.envoyerChemin();
+  }
+
+  envoyerOrigine() {
+    if (this.fenetre) this.sortie(encoderOrigine({ ox: this.ox, oy: this.oy, version: this.versionOrigine, cellule: Math.round(CELLULE * 1000) }));
+  }
+
+  renvoyerTout() { for (let i = 0; i < TAILLE_CARTE; i++) this.aRenvoyer.add(i); }
+
   // ===== Entrées : ordres du téléphone =====
 
   /** Reçoit une trame du téléphone (Uint8Array) et agit. Ne lève jamais d'exception. */
@@ -188,7 +246,11 @@ export class FauxRover {
         this.manette = { vx: ordre.vx, vy: ordre.vy, w: ordre.w, monde: ordre.monde, t: this.t };
         this.garde = false;
         break;
-      case 'aller': this.allerA(ordre.x / 1000, ordre.y / 1000); break;
+      case 'aller': {
+        const c = this.fenetre ? this.centreFenetre() : { x: 0, y: 0 }; // ALLER est relatif au centre de la fenêtre
+        this.allerA(c.x + ordre.x / 1000, c.y + ordre.y / 1000);
+        break;
+      }
       case 'texte': this.commande(ordre.texte); break;
       default: break;
     }
@@ -209,7 +271,7 @@ export class FauxRover {
       case 'params': Object.keys(this.params).forEach((n) => this.ligneP(n)); break;
       case 'recaler': this.recaler(); break;
       case 'carte':
-        if (args[0] === 'raz') { this.carte.fill(0); this.evt('carte effacée'); } else this.err('commande carte inconnue');
+        if (args[0] === 'raz') { this.carte.fill(0); this.renvoyerTout(); this.evt('carte effacée'); } else this.err('commande carte inconnue');
         break;
       case 'radar':
         if (['arret', 'auto', 'balayage', 'fixe', 'suivi'].includes(args[0])) { this.radar = args[0]; this.evt(`radar : ${args[0]}`); } else this.err('mode radar inconnu');
@@ -306,7 +368,7 @@ export class FauxRover {
   allerA(x, y, base = false, garder = false) {
     if (!base && !garder) this.annuler();
     const lim = (TAILLE_CARTE / 2) * CELLULE - 0.03;
-    this.but = { x: limiter(x, -lim, lim), y: limiter(y, -lim, lim), base };
+    this.but = this.fenetre ? { x, y, base } : { x: limiter(x, -lim, lim), y: limiter(y, -lim, lim), base };
     this.tReplan = -10;
     this.tBloque = 0;
     this.tAller = this.t;
@@ -325,6 +387,7 @@ export class FauxRover {
     if (this.cible) { const [x, y] = conv(this.cible.x, this.cible.y); this.cible = { x, y }; }
     this.x = 0; this.y = 0; this.cap = 0;
     this.carte.fill(0);
+    if (this.fenetre) { this.ox = -TAILLE_CARTE / 2; this.oy = -TAILLE_CARTE / 2; this.versionOrigine = (this.versionOrigine + 2) & 0xfe; this.envoyerOrigine(); this.renvoyerTout(); }
     this.annuler();
     this.evt('recalé : nouvelle origine');
   }
@@ -343,7 +406,7 @@ export class FauxRover {
       }
     }
     // Le rover est forcément quelque part : on dégage ses abords immédiats.
-    const c0 = caseDe(this.x); const l0 = caseDe(this.y);
+    const c0 = this.caseX(this.x); const l0 = this.caseY(this.y);
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (dansCarte(c0 + dx, l0 + dy)) bloque[(l0 + dy) * TAILLE_CARTE + c0 + dx] = 0;
     return bloque;
   }
@@ -357,8 +420,8 @@ export class FauxRover {
     const N = TAILLE_CARTE;
     const bloque = this.grilleBloquee();
     const passe = (i) => !bloque[i] && (!seulementLibre || this.carte[i] === CASE_LIBRE);
-    const depart = limiter(caseDe(this.y), 0, N - 1) * N + limiter(caseDe(this.x), 0, N - 1);
-    let but = limiter(caseDe(by), 0, N - 1) * N + limiter(caseDe(bx), 0, N - 1);
+    const depart = limiter(this.caseY(this.y), 0, N - 1) * N + limiter(this.caseX(this.x), 0, N - 1);
+    let but = limiter(this.caseY(by), 0, N - 1) * N + limiter(this.caseX(bx), 0, N - 1);
     const pere = new Int16Array(N * N).fill(-2);
     pere[depart] = -1;
     const file = [depart];
@@ -402,7 +465,7 @@ export class FauxRover {
     while (a < cases.length - 1) {
       let b = cases.length - 1;
       while (b > a + 1 && !droit(cases[a], cases[b])) b--;
-      points.push({ x: centreCase(cases[b] % N), y: centreCase(Math.floor(cases[b] / N)) });
+      points.push({ x: this.centreX(cases[b] % N), y: this.centreY(Math.floor(cases[b] / N)) });
       a = b;
     }
     // le dernier point est exactement le but demandé (si on l'a atteint)
@@ -414,7 +477,7 @@ export class FauxRover {
   trouverFrontiere() {
     const N = TAILLE_CARTE;
     const bloque = this.grilleBloquee();
-    const depart = limiter(caseDe(this.y), 0, N - 1) * N + limiter(caseDe(this.x), 0, N - 1);
+    const depart = limiter(this.caseY(this.y), 0, N - 1) * N + limiter(this.caseX(this.x), 0, N - 1);
     const vu = new Uint8Array(N * N); vu[depart] = 1;
     const file = [depart];
     const echecs = this.etat.echecs ?? [];
@@ -426,7 +489,7 @@ export class FauxRover {
           if (dansCarte(c + dx, l + dy) && this.carte[(l + dy) * N + c + dx] === CASE_INCONNUE) inconnues++;
         }
         const refuse = echecs.some(([ec, el]) => Math.abs(ec - c) <= 4 && Math.abs(el - l) <= 4);
-        if (inconnues >= 3 && !refuse) return { c, l, x: centreCase(c), y: centreCase(l) };
+        if (inconnues >= 3 && !refuse) return { c, l, x: this.centreX(c), y: this.centreY(l) };
       }
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nc = c + dx; const nl = l + dy;
@@ -444,7 +507,8 @@ export class FauxRover {
     const cle = this.chemin.map((p) => `${Math.round(p.x * 1000)},${Math.round(p.y * 1000)}`).join(';');
     if (cle === this.cheminEnvoye) return;
     this.cheminEnvoye = cle;
-    this.sortie(encoderChemin(this.chemin.map((p) => ({ x: p.x * 1000, y: p.y * 1000 }))));
+    const c = this.fenetre ? this.centreFenetre() : { x: 0, y: 0 };
+    this.sortie(encoderChemin(this.chemin.map((p) => ({ x: (p.x - c.x) * 1000, y: (p.y - c.y) * 1000 }))));
   }
 
   /** Suit this.chemin. Renvoie { vx, vy, w, fini } dans le repère du rover (m/s, rad/s). */
@@ -655,16 +719,18 @@ export class FauxRover {
     let cmd = this.calculerCommande(dt);
     cmd = this.appliquerSecurites(cmd);
     this.integrer(cmd, dt);
+    this.recentrerFenetre();
     const repos = this.mode === 'manuel' && !this.but && Math.hypot(this.vxb, this.vyb) < 0.01 && Math.abs(this.w) < 0.02;
     if (this.veilleS > 0 && !this.veille && repos && this.t - this.tOrdre > this.veilleS) { this.veille = true; this.evt('veille : tête et moteurs au repos'); }
     if (this.veille && !repos) { this.veille = false; this.evt('réveil'); }
     if (!this.veille) this.balayerSonar(dt);
     this.tension = Math.max(5.5, this.tension - 0.0006 * dt * (1 + 3 * Math.hypot(this.vxb, this.vyb)));
     // Cadences d'émission : ÉTAT 10 Hz, POINTS 10 Hz, CARTE 4 Hz.
-    this.cpt.etat += dt; this.cpt.points += dt; this.cpt.carte += dt;
+    this.cpt.etat += dt; this.cpt.points += dt; this.cpt.carte += dt; this.cpt.origine = (this.cpt.origine ?? 0) + dt;
+    if (this.cpt.origine >= 1) { this.cpt.origine = 0; this.envoyerOrigine(); }
     if (this.cpt.points >= 0.1) { this.cpt.points = 0; this.envoyerPoints(); }
     if (this.cpt.etat >= 0.1) { this.cpt.etat = 0; this.envoyerEtat(); }
-    if (this.cpt.carte >= 0.25) { this.cpt.carte = 0; this.envoyerCarte(); }
+    if (this.cpt.carte >= (this.fenetre ? 0.1 : 0.25)) { this.cpt.carte = 0; this.envoyerCarte(); }
   }
 
   majCible(dt) {
@@ -690,7 +756,7 @@ export class FauxRover {
       const marge = d - RAYON;
       const arret = this.params.dist_arret.v;
       // « zone non regardée » : la case devant n'est pas encore connue
-      const cc = caseDe(this.x + wx * 0.3); const ll = caseDe(this.y + wy * 0.3);
+      const cc = this.caseX(this.x + wx * 0.3); const ll = this.caseY(this.y + wy * 0.3);
       this.aveugle = dansCarte(cc, ll) && this.carte[ll * TAILLE_CARTE + cc] === CASE_INCONNUE && this.mode !== 'manuel';
       this.libreCm = this.aveugle ? 255 : Math.round(limiter(marge * 100, 0, 254));
       let k = 1;
@@ -772,7 +838,7 @@ export class FauxRover {
   marquerRayon(ox, oy, dx, dy, portee, echo) {
     const px = -dy; const py = dx; // perpendiculaire (pour élargir un peu le faisceau)
     const poser = (s, decal, valeur) => {
-      const c = caseDe(ox + dx * s + px * decal); const l = caseDe(oy + dy * s + py * decal);
+      const c = this.caseX(ox + dx * s + px * decal); const l = this.caseY(oy + dy * s + py * decal);
       if (!dansCarte(c, l)) return;
       const i = l * TAILLE_CARTE + c;
       if (valeur === CASE_OCCUPEE) this.carte[i] = CASE_OCCUPEE;
@@ -808,8 +874,10 @@ export class FauxRover {
       cibleGis = degres(enrouler(Math.atan2(this.cible.x - this.x, this.cible.y - this.y) - this.cap));
       cibleD = Math.hypot(this.cible.x - this.x, this.cible.y - this.y) * 100;
     }
+    const c = this.fenetre ? this.centreFenetre() : { x: 0, y: 0 };
     this.sortie(encoderEtat({
-      x: this.x * 1000, y: this.y * 1000, cap: degres(this.cap), drapeaux: this.drapeaux(),
+      versionOrigine: this.fenetre ? this.versionOrigine : undefined,
+      x: (this.x - c.x) * 1000, y: (this.y - c.y) * 1000, cap: degres(this.cap), drapeaux: this.drapeaux(),
       comportement: this.but && !this.but.base && this.mode === 'manuel' ? 0 : Math.max(0, MODES.indexOf(this.mode)),
       tension: this.tension + (this.alea() - 0.5) * 0.04, tete: this.tete, sonar: this.dernierEcho,
       cibleGis, cibleD, libre: this.libreCm ?? 255,
@@ -820,21 +888,50 @@ export class FauxRover {
 
   envoyerPoints() {
     if (!this.echos.length) return;
-    this.sortie(encoderPoints(this.echos.splice(0, 17)));
+    const c = this.fenetre ? this.centreFenetre() : { x: 0, y: 0 };
+    this.sortie(encoderPoints(this.echos.splice(0, 17).map((e) => ({ ...e, x: e.x - c.x * 1000, y: e.y - c.y * 1000 }))));
   }
 
-  /** Envoie 8 lignes de la carte à tour de rôle : la carte complète en 2 s. */
+  /** Envoie la carte : sans fenêtre, 8 lignes à tour de rôle ; avec, seulement ce qui a changé (les plus proches d'abord). */
   envoyerCarte() {
-    const nombre = 8;
+    const N = TAILLE_CARTE;
+    if (!this.fenetre) {
+      const nombre = 8;
+      const lignes = [];
+      for (let k = 0; k < nombre; k++) lignes.push(this.carte.subarray((this.ligneCarte + k) * N, (this.ligneCarte + k + 1) * N));
+      this.sortie(encoderCarte(this.ligneCarte, lignes));
+      this.ligneCarte = (this.ligneCarte + nombre) % N;
+      return;
+    }
+    const ligne = (l) => this.carte.subarray(l * N, (l + 1) * N);
+    const change = (l) => this.aRenvoyer.has(l) || ligne(l).some((v, i) => v !== this.envoye[l * N + i]);
+    const lr = Math.min(N - 1, Math.max(0, this.caseY(this.y)));
+    // la ligne qui a changé la plus proche du rover, puis ses voisines qui ont changé aussi (jusqu'à 8 consécutives)
+    let depart = -1;
+    for (let d = 0; d < N && depart < 0; d++) {
+      for (const l of [lr - d, lr + d]) if (l >= 0 && l < N && change(l)) { depart = l; break; }
+    }
+    if (depart < 0) { // rien n'a changé : une ligne par seconde en fond, pour qu'une trame perdue ne laisse pas une ligne fausse
+      this.cpt.fond = (this.cpt.fond ?? 0) + 0.1;
+      if (this.cpt.fond < 1) return;
+      this.cpt.fond = 0;
+      depart = this.ligneFond; this.ligneFond = (this.ligneFond + 1) % N;
+      this.aRenvoyer.add(depart);
+    }
+    let debut = depart;
+    while (debut > 0 && depart - debut < 3 && change(debut - 1)) debut--;
+    let fin = depart;
+    while (fin < N - 1 && fin - debut < 7 && change(fin + 1)) fin++;
     const lignes = [];
-    for (let k = 0; k < nombre; k++) lignes.push(this.carte.subarray((this.ligneCarte + k) * TAILLE_CARTE, (this.ligneCarte + k + 1) * TAILLE_CARTE));
-    this.sortie(encoderCarte(this.ligneCarte, lignes));
-    this.ligneCarte = (this.ligneCarte + nombre) % TAILLE_CARTE;
+    for (let l = debut; l <= fin; l++) { lignes.push(ligne(l)); this.envoye.set(ligne(l), l * N); this.aRenvoyer.delete(l); }
+    this.sortie(encoderCarte(debut, lignes));
   }
 
   /** À la connexion du téléphone : identité, comportements, paramètres. */
   accueillir() {
     this.envoyerInfos();
+    this.envoyerOrigine();
+    this.renvoyerTout();
     Object.keys(this.params).forEach((n) => this.ligneP(n));
     this.cheminEnvoye = '';
     this.envoyerChemin();

@@ -7,7 +7,9 @@
 // Gestes : un doigt qui glisse déplace la carte, deux doigts pincent pour zoomer, un simple
 // toucher envoie le rover à cet endroit (l'application reçoit l'événement via `surToucher`).
 
-import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, CASE_POSSIBLE, appliquerCarte } from './protocole.js';
+import { CASE_LIBRE, CASE_OCCUPEE, CASE_POSSIBLE } from './protocole.js';
+import { CarteGlobale, TUILE } from './carte-globale.js';
+import { Repere } from './repere.js';
 import { boucles, adoucir } from './contours.js';
 import { LARGEUR_ROVER, LONGUEUR_ROVER, positionSonar } from './gabarit.js';
 import { Trace } from './trace.js';
@@ -34,7 +36,8 @@ const COULEURS = {
   base: '#a3a9b8',
 };
 
-const PPM_MIN = 30; // pixels par mètre
+const PPM_MIN = 30; // pixels par mètre (le zoom arrière descend plus bas si la carte est plus grande : voir _ppmMin)
+const PPM_ABSOLU_MIN = 1.5;
 const PPM_MAX = 700;
 const DUREE_ECHO_MS = 4500; // un écho s'estompe en 4,5 s
 const PORTEE_SONAR = 2.55;
@@ -58,12 +61,11 @@ export class VueCarte extends EventTarget {
     this.ctx = canvas.getContext('2d');
     this.surToucher = surToucher ?? (() => {});
     this.cellule = 0.05; // m, mis à jour par la ligne « info cellule=… »
-    this.grille = new Uint8Array(TAILLE_CARTE * TAILLE_CARTE);
-    // Les contours lissés de la carte (chemins en « unités de case »), recalculés SEULEMENT quand une ligne change.
-    this.formes = { libre: null, possible: null, obstacle: null, touche: null };
-    this.touches = new Uint8Array(TAILLE_CARTE * TAILLE_CARTE); // cases où un écho du sonar est tombé
+    // La carte globale : des tuiles de 64 × 64 cases rangées à leur place ABSOLUE (elle grandit avec le rover).
+    // Les positions reçues sont relatives au centre de la fenêtre du rover ; `repere` les ramène en absolu.
+    this.globale = new CarteGlobale();
+    this.repere = new Repere();
     this._tFormes = 0;
-    this.sale = true; // les contours doivent être recalculés
     this.invalide = true; // il faut redessiner (on ne redessine rien quand rien ne change)
     this.rover = { x: 0, y: 0, cap: 0, tete: 0, sonar: 0, ok: false }; // mètres, radians
     this.lisseur = new Lisseur(); // fait glisser le rover entre deux trames ÉTAT (8 à 20 par seconde)
@@ -91,19 +93,37 @@ export class VueCarte extends EventTarget {
 
   // ---------- Données ----------
 
-  definirCellule(m) { if (m > 0.005 && m < 1) this.cellule = m; }
+  definirCellule(m) { this.repere.definirCellule(m); this.cellule = this.repere.cellule; }
 
-  /** Applique une trame CARTE décodée. */
-  appliquerCarte(msg) { if (appliquerCarte(this.grille, msg) > 0) this.sale = this.invalide = true; }
+  /** Applique une trame CARTE décodée : chaque ligne est rangée à sa place absolue, avec l'origine en cours. */
+  appliquerCarte(msg) { if (this.globale.ranger(msg, this.repere) > 0) this.invalide = true; }
 
-  effacerCarte() { this.grille.fill(0); this.touches.fill(0); this.sale = this.invalide = true; }
+  effacerCarte() { this.globale.effacer(); this.invalide = true; }
 
-  /** Met à jour la position du rover à partir d'une trame ÉTAT décodée. */
+  /**
+   * Une trame ORIGINE est arrivée : la fenêtre du rover a glissé. La carte, la trace et le rover restent en
+   * coordonnées absolues, donc rien ne bouge à l'écran. Un recalage du rover (position et carte remises à zéro)
+   * ne se reconnaît pas ici : il est vu par le texte « reposé » / « recalé » ou par le saut de la position
+   * à (0, 0) (voir majPosition dans app.js), qui vident alors la carte et la trace.
+   */
+  appliquerOrigine(o) {
+    const res = this.repere.appliquer(o);
+    this.cellule = this.repere.cellule;
+    this.invalide = true;
+    return res;
+  }
+
+  /** Position absolue (m) d'une trame ÉTAT décodée, ou null si elle est écrite dans un repère inconnu. */
+  positionAbsolue(e) { return this.repere.absolu(e.x, e.y, e.versionOrigine); }
+
+  /** Met à jour la position du rover à partir d'une trame ÉTAT décodée. Renvoie false si la trame est ignorée. */
   majEtat(e) {
     const r = this.rover;
-    const memo = `${e.x},${e.y},${e.cap},${e.tete},${e.sonar},${e.cibleD},${e.cibleGis}`;
+    const pos = this.positionAbsolue(e);
+    if (!pos) return false; // repère inconnu ou fenêtre en train de glisser : on garde la position précédente
+    const memo = `${e.x},${e.y},${e.cap},${e.tete},${e.sonar},${e.cibleD},${e.cibleGis},${e.versionOrigine}`;
     if (memo !== this._memoEtat) { this._memoEtat = memo; this.invalide = true; }
-    const x = e.x / 1000; const y = e.y / 1000;
+    const x = pos.x; const y = pos.y;
     const cap = (e.cap * Math.PI) / 180; const tete = (e.tete * Math.PI) / 180;
     r.sonar = e.sonar;
     // Avec le lissage, c'est la boucle d'affichage qui déplace le rover image par image (voir _appliquerLissage).
@@ -119,39 +139,88 @@ export class VueCarte extends EventTarget {
       this.cible = { x: x + Math.sin(a) * (e.cibleD / 100), y: y + Math.cos(a) * (e.cibleD / 100) };
     } else this.cible = null;
     if (this.marqueur && Math.hypot(this.marqueur.x - x, this.marqueur.y - y) < 0.1) this.marqueur = null;
+    return true;
   }
 
   ajouterPoints(points) {
     const maintenant = performance.now();
     for (const p of points) {
       if (p.distance > 0) {
-        this.echos.push({ x: p.x / 1000, y: p.y / 1000, t: maintenant }); this.invalide = true;
-        const c = Math.floor(p.x / 1000 / this.cellule) + TAILLE_CARTE / 2; const l = Math.floor(p.y / 1000 / this.cellule) + TAILLE_CARTE / 2;
-        if (c >= 0 && c < TAILLE_CARTE && l >= 0 && l < TAILLE_CARTE && !this.touches[l * TAILLE_CARTE + c]) { this.touches[l * TAILLE_CARTE + c] = 1; this.sale = true; }
+        const pos = this.repere.absolu(p.x, p.y);
+        if (!pos) continue;
+        this.echos.push({ x: pos.x, y: pos.y, t: maintenant }); this.invalide = true;
+        this.globale.marquerTouche(Math.floor(pos.x / this.cellule), Math.floor(pos.y / this.cellule));
       }
     }
     if (this.echos.length > 600) this.echos.splice(0, this.echos.length - 600);
   }
 
-  definirChemin(points) { this.chemin = points.map((p) => ({ x: p.x / 1000, y: p.y / 1000 })); this.invalide = true; }
+  definirChemin(points) {
+    this.chemin = points.map((p) => this.repere.absolu(p.x, p.y)).filter(Boolean);
+    this.invalide = true;
+  }
 
   poserMarqueur(x, y) { this.marqueur = { x, y, t: performance.now() }; this.invalide = true; }
   retirerMarqueur() { this.marqueur = null; this.invalide = true; }
 
   /** Après « recaler » : nouvelle origine, tout l'historique géométrique est caduc. */
-  reinitialiserTrajet() { this.lisseur.reinitialiser(); this.trace.effacer(); this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
+  reinitialiserTrajet() { this.repere.reinitialiser(); this.cellule = this.repere.cellule; this.lisseur.reinitialiser(); this.trace.effacer(); this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
 
   // ---------- Vue ----------
 
-  recentrer() { this.suivre = true; this.vue.ppm = Math.min(this.largeur, this.hauteur) / 2.6; this._signalerVue(); }
+  /**
+   * Reprend le suivi du rover. Si on le suivait déjà (deuxième toucher), on revient aussi au zoom d'origine ;
+   * sinon on garde le zoom choisi (par exemple pour regarder toute la carte).
+   */
+  recentrer() {
+    const dejaSuivi = this.suivre;
+    this.suivre = true;
+    if (dejaSuivi) this.vue.ppm = Math.min(this.largeur, this.hauteur) / 2.6;
+    this._signalerVue();
+  }
 
-  zoomer(facteur, px = this.largeur / 2, py = this.hauteur / 2) {
+  /** Le zoom arrière le plus fort permis : celui qui fait tenir TOUTE la carte globale à l'écran (au plus 1,5 px/m). */
+  _ppmMin() {
+    const fit = this._ppmPourTout();
+    return Math.max(PPM_ABSOLU_MIN, Math.min(PPM_MIN, fit ?? PPM_MIN));
+  }
+
+  /** Échelle (px/m) pour faire tenir toute la carte connue, rover compris, avec une marge ; null si la carte est vide. */
+  _ppmPourTout() {
+    const e = this._etendueMetres();
+    if (!e) return null;
+    const marge = 1.12;
+    return Math.min(this.largeur / (Math.max(e.maxX - e.minX, 0.5) * marge), this.hauteur / (Math.max(e.maxY - e.minY, 0.5) * marge));
+  }
+
+  /** Étendue de la carte connue et du rover, en mètres absolus. */
+  _etendueMetres() {
+    const g = this.globale.etendue;
+    let minX = Infinity; let maxX = -Infinity; let minY = Infinity; let maxY = -Infinity;
+    if (g) { minX = g.minCx * this.cellule; maxX = (g.maxCx + 1) * this.cellule; minY = g.minCy * this.cellule; maxY = (g.maxCy + 1) * this.cellule; }
+    if (this.rover.ok) { minX = Math.min(minX, this.rover.x - 0.3); maxX = Math.max(maxX, this.rover.x + 0.3); minY = Math.min(minY, this.rover.y - 0.3); maxY = Math.max(maxY, this.rover.y + 0.3); }
+    return Number.isFinite(minX) ? { minX, maxX, minY, maxY } : null;
+  }
+
+  /** Cadre toute la carte globale (le suivi est suspendu). */
+  ajusterTout() {
+    const e = this._etendueMetres();
+    if (!e) return;
+    this.suivre = false;
+    this.vue.ppm = Math.min(PPM_MAX, Math.max(PPM_ABSOLU_MIN, this._ppmPourTout()));
+    this.vue.cx = (e.minX + e.maxX) / 2; this.vue.cy = (e.minY + e.maxY) / 2;
+    this._signalerVue();
+  }
+
+  /** Zoome autour d'un point de l'écran ; `geste` = vrai quand c'est la main de l'utilisateur (le suivi se suspend). */
+  zoomer(facteur, px = this.largeur / 2, py = this.hauteur / 2, geste = false) {
     const v = this.vue;
     const wx = v.cx + (px - this.largeur / 2) / v.ppm;
     const wy = v.cy - (py - this.hauteur / 2) / v.ppm;
-    v.ppm = Math.min(PPM_MAX, Math.max(PPM_MIN, v.ppm * facteur));
+    v.ppm = Math.min(PPM_MAX, Math.max(this._ppmMin(), v.ppm * facteur));
     v.cx = wx - (px - this.largeur / 2) / v.ppm;
     v.cy = wy + (py - this.hauteur / 2) / v.ppm;
+    if (geste) this.suivre = false;
     this._signalerVue();
   }
 
@@ -183,7 +252,7 @@ export class VueCarte extends EventTarget {
     c.addEventListener('wheel', (ev) => {
       ev.preventDefault();
       const r = c.getBoundingClientRect();
-      this.zoomer(ev.deltaY < 0 ? 1.15 : 1 / 1.15, ev.clientX - r.left, ev.clientY - r.top);
+      this.zoomer(ev.deltaY < 0 ? 1.15 : 1 / 1.15, ev.clientX - r.left, ev.clientY - r.top, true);
     }, { passive: false });
   }
 
@@ -223,7 +292,7 @@ export class VueCarte extends EventTarget {
       this.vue.cx -= (mx - mxAvant) / this.vue.ppm;
       this.vue.cy += (my - myAvant) / this.vue.ppm;
       this.invalide = true;
-      if (dAvant > 4) this.zoomer(dApres / dAvant, mx, my);
+      if (dAvant > 4) this.zoomer(dApres / dAvant, mx, my, true);
       if (this.suivre) { this.suivre = false; this._signalerVue(); }
     }
     this._pointeurs.set(ev.pointerId, p);
@@ -295,57 +364,100 @@ export class VueCarte extends EventTarget {
     return Math.hypot(this.rover.x - this.vue.cx, this.rover.y - this.decalage * this.hauteur / this.vue.ppm - this.vue.cy);
   }
 
-  /** Reconstruit les contours lissés (libre, possible, obstacles, obstacles touchés). Au plus 8 fois par seconde. */
-  _majFormes() {
+  /**
+   * Recalcule les contours lissés des tuiles « sales » qui sont à l'écran (ou presque). Chaque tuile est calculée avec une
+   * bordure d'une case empruntée à ses voisines, pour que les formes se raccordent sans couture d'une tuile à l'autre.
+   * Au plus 12 fois par seconde et pendant 6 ms au plus : le reste attend l'image suivante.
+   */
+  _majFormes(visibles) {
     const maintenant = performance.now();
-    if (maintenant - this._tFormes < 120) { this.invalide = true; return; } // trop tôt : on réessaie à l'image suivante
+    if (maintenant - this._tFormes < 80) { this.invalide = true; return; }
     this._tFormes = maintenant;
-    const N = TAILLE_CARTE; const g = this.grille; const touches = this.touches;
-    const touchee = (i) => {
-      const c = i % N; const l = (i - c) / N;
-      return touches[i] || (c > 0 && touches[i - 1]) || (c < N - 1 && touches[i + 1]) || (l > 0 && touches[i - N]) || (l < N - 1 && touches[i + N]);
-    };
-    const chemin = (predicat, iterations) => {
-      const p = new Path2D();
-      for (const b of boucles(g, N, predicat)) {
-        const lisse = adoucir(b, iterations);
-        p.moveTo(lisse[0][0], lisse[0][1]);
-        for (let i = 1; i < lisse.length; i++) p.lineTo(lisse[i][0], lisse[i][1]);
-        p.closePath();
+    const debut = performance.now();
+    const M = TUILE + 2;
+    const padV = new Uint8Array(M * M); const padT = new Uint8Array(M * M);
+    for (const tuile of visibles) {
+      if (!tuile.sale && tuile.formes) continue;
+      if (performance.now() - debut > 6) { this.invalide = true; return; }
+      // la tuile et ses huit voisines
+      const voisines = [];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) voisines.push(this.globale.tuile(tuile.tx + dx, tuile.ty + dy));
+      for (let py = 0; py < M; py++) {
+        const gy = py - 1; const oy = gy < 0 ? 0 : gy >= TUILE ? 2 : 1; const ly = gy < 0 ? TUILE - 1 : gy >= TUILE ? 0 : gy;
+        for (let px = 0; px < M; px++) {
+          const gx = px - 1; const ox = gx < 0 ? 0 : gx >= TUILE ? 2 : 1; const lx = gx < 0 ? TUILE - 1 : gx >= TUILE ? 0 : gx;
+          const t = voisines[oy * 3 + ox];
+          padV[py * M + px] = t ? t.v[ly * TUILE + lx] : 0;
+          padT[py * M + px] = t ? t.t[ly * TUILE + lx] : 0;
+        }
       }
-      return p;
-    };
-    this.formes.libre = chemin((v) => v === CASE_LIBRE, 3);
-    this.formes.possible = chemin((v) => v === CASE_POSSIBLE, 1);
-    this.formes.obstacle = chemin((v) => v === CASE_OCCUPEE, 2);
-    this.formes.touche = chemin((v, i) => v === CASE_OCCUPEE && !!touchee(i), 2);
-    this.sale = false;
+      const touchee = (i) => {
+        const c = i % M; const l = (i - c) / M;
+        return padT[i] || (c > 0 && padT[i - 1]) || (c < M - 1 && padT[i + 1]) || (l > 0 && padT[i - M]) || (l < M - 1 && padT[i + M]);
+      };
+      const chemin = (predicat, iterations) => {
+        const p = new Path2D();
+        for (const b of boucles(padV, M, predicat)) {
+          const lisse = adoucir(b, iterations);
+          p.moveTo(lisse[0][0], lisse[0][1]);
+          for (let i = 1; i < lisse.length; i++) p.lineTo(lisse[i][0], lisse[i][1]);
+          p.closePath();
+        }
+        return p;
+      };
+      tuile.formes = {
+        libre: chemin((v) => v === CASE_LIBRE, 3),
+        possible: chemin((v) => v === CASE_POSSIBLE, 1),
+        obstacle: chemin((v) => v === CASE_OCCUPEE, 2),
+        touche: chemin((v, i) => v === CASE_OCCUPEE && !!touchee(i), 2),
+      };
+      tuile.sale = false;
+    }
   }
 
-  /** Dessine la carte : zone libre lisse, obstacles à contour net, inconnu = le fond. */
+  /** Dessine la carte globale : zone libre lisse, obstacles à contour net, inconnu = le fond. Seules les tuiles visibles. */
   _dessinerCarte() {
     const { ctx, vue } = this;
-    if (this.sale) this._majFormes();
-    if (!this.formes.libre) return;
-    const demi = (TAILLE_CARTE / 2) * this.cellule;
-    const [sx0, sy0] = this.versEcran(-demi, -demi); // coin bas gauche de la carte
     const k = this.cellule * vue.ppm; // pixels par case
+    const taille = TUILE * k;
     const px = 1 / k; // un pixel d'écran, en unités de case
-    ctx.save();
-    ctx.setTransform(this.dpr * k, 0, 0, -this.dpr * k, this.dpr * sx0, this.dpr * sy0);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const visibles = [];
+    for (const t of this.globale.tuiles.values()) {
+      const [sx, sy] = this.versEcran(t.tx * TUILE * this.cellule, t.ty * TUILE * this.cellule); // coin bas gauche de la tuile
+      if (sx > this.largeur + 2 || sx + taille < -2 || sy < -2 || sy - taille > this.hauteur + 2) continue;
+      visibles.push(t);
+      t.ecran = [sx, sy];
+    }
+    this._majFormes(visibles);
+    const passe = (dessiner) => {
+      for (const t of visibles) {
+        if (!t.formes) continue;
+        ctx.save();
+        ctx.setTransform(this.dpr * k, 0, 0, -this.dpr * k, this.dpr * t.ecran[0], this.dpr * t.ecran[1]);
+        ctx.beginPath(); ctx.rect(-0.03, -0.03, TUILE + 0.06, TUILE + 0.06); ctx.clip(); // chaque tuile reste dans son carré
+        ctx.translate(-1, -1); // les formes sont calculées avec une bordure d'une case
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        dessiner(t.formes);
+        ctx.restore();
+      }
+    };
     // zone libre : halo doux, surface, filet clair
-    ctx.strokeStyle = 'rgba(10, 74, 112, 0.35)'; ctx.lineWidth = 5 * px; ctx.stroke(this.formes.libre);
-    ctx.fillStyle = COULEURS.libre; ctx.fill(this.formes.libre, 'nonzero');
-    ctx.strokeStyle = COULEURS.libreBord; ctx.lineWidth = 1.2 * px; ctx.stroke(this.formes.libre);
+    passe((f) => {
+      ctx.strokeStyle = 'rgba(10, 74, 112, 0.35)'; ctx.lineWidth = 5 * px; ctx.stroke(f.libre);
+      ctx.fillStyle = COULEURS.libre; ctx.fill(f.libre, 'nonzero');
+      ctx.strokeStyle = COULEURS.libreBord; ctx.lineWidth = 1.2 * px; ctx.stroke(f.libre);
+    });
     // possible : bien plus discret que les obstacles confirmés
-    ctx.fillStyle = COULEURS.possible; ctx.fill(this.formes.possible, 'nonzero');
-    ctx.strokeStyle = 'rgba(214, 192, 142, 0.35)'; ctx.lineWidth = 1 * px; ctx.stroke(this.formes.possible);
+    passe((f) => {
+      ctx.fillStyle = COULEURS.possible; ctx.fill(f.possible, 'nonzero');
+      ctx.strokeStyle = 'rgba(214, 192, 142, 0.35)'; ctx.lineWidth = 1 * px; ctx.stroke(f.possible);
+    });
     // obstacles : formes pleines aux coins adoucis, contour net
-    ctx.fillStyle = COULEURS.obstacle; ctx.fill(this.formes.obstacle, 'nonzero');
-    ctx.fillStyle = COULEURS.touche; ctx.fill(this.formes.touche, 'nonzero');
-    ctx.strokeStyle = COULEURS.obstacleBord; ctx.lineWidth = 1.6 * px; ctx.stroke(this.formes.obstacle);
-    ctx.restore();
+    passe((f) => {
+      ctx.fillStyle = COULEURS.obstacle; ctx.fill(f.obstacle, 'nonzero');
+      ctx.fillStyle = COULEURS.touche; ctx.fill(f.touche, 'nonzero');
+      ctx.strokeStyle = COULEURS.obstacleBord; ctx.lineWidth = 1.6 * px; ctx.stroke(f.obstacle);
+    });
   }
 
   dessiner() {
