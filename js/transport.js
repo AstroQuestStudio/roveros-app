@@ -7,14 +7,23 @@
 //        etat ∈ 'deconnecte' | 'connexion' | 'connecte' | 'reconnexion' | 'erreur'
 //   transport.connecter() / transport.deconnecter()
 //
-// La file d'envoi garantit qu'on n'envoie JAMAIS plus de 25 trames par seconde
-// (règle de sécurité du protocole) : une trame toutes les 41 ms au plus.
+// La file d'envoi garantit :
+//   - jamais plus de 25 trames par seconde (règle de sécurité du protocole) : une trame toutes les 41 ms au plus ;
+//   - UNE SEULE écriture à la fois : Chrome refuse une écriture Bluetooth lancée pendant qu'une autre
+//     n'est pas terminée (« GATT operation already in progress ») et la trame serait perdue ;
+//   - une seule consigne MANETTE en attente (la plus récente) ; une consigne trop vieille est jetée ;
+//   - STOP et URGENCE passent devant et effacent toute consigne MANETTE encore en attente
+//     (sinon un vieil ordre de marche partirait APRÈS l'arrêt).
 
 import { T } from './protocole.js';
 
 /** Intervalle minimal entre deux écritures : 41 ms soit moins de 25 trames/s. */
 export const INTERVALLE_MIN_MS = 41;
 const TAILLE_MAX_FILE = 64;
+/** Une consigne MANETTE restée plus longtemps que cela dans la file est périmée : on la jette. */
+export const AGE_MAX_MANETTE_MS = 250;
+/** Une écriture qui ne finit pas en 1,5 s est considérée perdue (pour ne jamais bloquer la file). */
+const DELAI_ECRITURE_MS = 1500;
 
 export class Transport extends EventTarget {
   constructor(nom) {
@@ -24,7 +33,10 @@ export class Transport extends EventTarget {
     this._file = [];
     this._minuterie = null;
     this._dernierEnvoi = -Infinity;
+    this._ecritureEnCours = false;
     this.envoyees = 0; // compteur, pratique pour les tests et le diagnostic
+    this.jetees = 0; // trames remplacées ou périmées avant d'avoir été écrites
+    this.fileMax = 0; // plus grande longueur atteinte par la file
   }
 
   get connecte() { return this.etat === 'connecte'; }
@@ -54,18 +66,26 @@ export class Transport extends EventTarget {
     const type = trame[0];
     const priorite = options.priorite ?? (type === T.URGENCE || type === T.STOP);
     const cle = options.cle ?? (type === T.MANETTE ? 'manette' : null);
+    if (type === T.STOP || type === T.URGENCE) {
+      // Plus aucun ordre de marche ne doit partir derrière un arrêt.
+      const avant = this._file.length;
+      this._file = this._file.filter((e) => e.trame[0] !== T.MANETTE);
+      this.jetees += avant - this._file.length;
+    }
     if (cle) {
       const i = this._file.findIndex((e) => e.cle === cle);
-      if (i >= 0) this._file.splice(i, 1);
+      if (i >= 0) { this._file.splice(i, 1); this.jetees++; }
     }
-    const element = { trame, cle, tentatives: 0 };
+    const element = { trame, cle, tentatives: 0, t: performance.now() };
     if (priorite) this._file.unshift(element);
     else this._file.push(element);
     // File trop longue (liaison lente) : on abandonne les plus anciennes, sauf les prioritaires.
     while (this._file.length > TAILLE_MAX_FILE) {
       const i = this._file.findIndex((e) => e.trame[0] !== T.URGENCE && e.trame[0] !== T.STOP);
       this._file.splice(i < 0 ? 0 : i, 1);
+      this.jetees++;
     }
+    if (this._file.length > this.fileMax) this.fileMax = this._file.length;
     this._pomper();
     return true;
   }
@@ -73,16 +93,34 @@ export class Transport extends EventTarget {
   /** Vide la file d'envoi (utile quand on verrouille l'arrêt d'urgence). */
   viderFile() { this._file.length = 0; }
 
+  /** Instantané pour le diagnostic et les mesures. */
+  statistiques() {
+    return { envoyees: this.envoyees, jetees: this.jetees, fileMax: this.fileMax, file: this._file.length };
+  }
+
   _pomper() {
-    if (this._minuterie !== null || this._file.length === 0) return;
+    if (this._minuterie !== null || this._ecritureEnCours || this._file.length === 0) return;
     const attente = Math.max(0, this._dernierEnvoi + INTERVALLE_MIN_MS - performance.now());
     this._minuterie = setTimeout(async () => {
       this._minuterie = null;
+      if (this._ecritureEnCours) return; // l'écriture en cours relancera la pompe en finissant
       const element = this._file.shift();
       if (!element) return;
+      if (element.cle === 'manette' && performance.now() - element.t > AGE_MAX_MANETTE_MS) {
+        this.jetees++; // consigne périmée : mieux vaut attendre la suivante que rejouer un vieil ordre
+        this._pomper();
+        return;
+      }
       this._dernierEnvoi = performance.now();
+      this._ecritureEnCours = true;
       try {
-        await this._ecrire(element.trame);
+        let garde;
+        try {
+          await Promise.race([
+            this._ecrire(element.trame),
+            new Promise((_, rejeter) => { garde = setTimeout(() => rejeter(new Error('écriture sans réponse')), DELAI_ECRITURE_MS); }),
+          ]);
+        } finally { clearTimeout(garde); }
         this.envoyees++;
       } catch (erreur) {
         // Un ordre vital (urgence, stop) est retenté ; le reste est abandonné (le suivant arrive vite).
@@ -93,6 +131,7 @@ export class Transport extends EventTarget {
         }
         this._erreurEcriture(erreur);
       }
+      this._ecritureEnCours = false;
       this._pomper();
     }, attente);
   }

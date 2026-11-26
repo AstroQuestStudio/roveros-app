@@ -36,12 +36,16 @@ test("file d'envoi : les MANETTE se remplacent, l'urgence passe devant", async (
   t.envoyer(encoderTexte('a'));
   t.envoyer(encoderTexte('b'));
   for (let i = 0; i < 10; i++) t.envoyer(encoderManette(i, 0, 0));
-  t.envoyer(encoderUrgence(true));
   await attendre(400);
   const types = t.ecritures.map((x) => x.type);
   assert.equal(types.filter((x) => x === T.MANETTE).length, 1, 'une seule MANETTE (la plus récente)');
   assert.equal(t.ecritures.find((x) => x.type === T.MANETTE).trame[1], 9);
-  assert.ok(types.indexOf(T.URGENCE) <= 1, "l'urgence part avant les textes en attente");
+  t.ecritures.length = 0;
+  t.envoyer(encoderTexte('a'));
+  t.envoyer(encoderTexte('b'));
+  t.envoyer(encoderUrgence(true));
+  await attendre(300);
+  assert.ok(t.ecritures.map((x) => x.type).indexOf(T.URGENCE) <= 1, "l'urgence part avant les textes en attente");
 });
 
 test("file d'envoi : rien n'est envoyé hors connexion", () => {

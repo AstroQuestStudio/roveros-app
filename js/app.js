@@ -505,15 +505,15 @@ $('#btn-dispo').addEventListener('click', () => {
 
 // -- Manettes flottantes --
 const manetteXY = new Manette($('#zone-xy'), $('#manette-xy'), {
-  surChangement: (x, y) => { pilote.sources.joystick = { x, y }; },
+  surChangement: (x, y) => pilote.maj('joystick', { x, y }),
   surAppui: () => vibrer(8),
 });
 const manetteRot = new Manette($('#zone-rot'), $('#manette-rot'), {
   axes: 'x',
-  surChangement: (x) => { pilote.sources.rotation = { x }; },
+  surChangement: (x) => pilote.maj('rotation', { x }),
   surAppui: () => vibrer(8),
 });
-new Clavier((x, y, w) => { pilote.sources.clavier = { x, y, w }; });
+new Clavier((x, y, w) => pilote.maj('clavier', { x, y, w }));
 
 $$('#seg-repere button').forEach((b) => b.addEventListener('click', () => {
   $$('#seg-repere button').forEach((o) => o.classList.toggle('actif', o === b));
@@ -552,7 +552,7 @@ $('#incl-zone-val').textContent = `${incl.zoneMorteDeg}°`; $('#incl-plein-val')
 
 function majInclinaison() {
   const v = incl.valeurs();
-  pilote.sources.inclinaison = { x: v.x, y: v.y };
+  pilote.maj('inclinaison', { x: v.x, y: v.y });
   // Le point ambre montre l'inclinaison même quand le doigt n'est pas posé.
   const { droite, avant } = incl.ecarts();
   const r = padIncl.clientWidth * 0.3;
@@ -572,7 +572,7 @@ zoneXY.addEventListener('pointerdown', (ev) => {
 });
 const lacherPad = () => {
   if (!incl.maintenu) return;
-  incl.maintenu = false; zoneXY.classList.remove('active'); pilote.sources.inclinaison = { x: 0, y: 0 };
+  incl.maintenu = false; zoneXY.classList.remove('active'); pilote.maj('inclinaison', { x: 0, y: 0 });
 };
 zoneXY.addEventListener('pointerup', lacherPad);
 zoneXY.addEventListener('pointercancel', lacherPad);
@@ -594,7 +594,7 @@ async function basculerInclinaison() {
   manetteXY.desactive = actif;
   poserTexte($('#aide-xy'), actif ? 'Gardez le doigt posé et inclinez' : 'Glissez pour avancer');
   $('#incl-etat').textContent = actif ? 'Active : gardez un doigt posé et inclinez' : 'Inactive';
-  if (!actif) pilote.sources.inclinaison = { x: 0, y: 0 };
+  if (!actif) pilote.maj('inclinaison', { x: 0, y: 0 });
 }
 $('#btn-incliner').addEventListener('click', basculerInclinaison);
 $('#btn-neutre').addEventListener('click', () => {
