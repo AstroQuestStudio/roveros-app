@@ -50,6 +50,8 @@ export function phraseEtat(e, ctx = {}) {
     return { texte, niveau: 'neutre', cle: 'liaison' };
   }
   if (!e) return { texte: 'En attente du rover…', niveau: 'neutre', cle: 'attente' };
+  // la liaison est ouverte mais le rover ne donne plus d'état : l'écran ne doit pas afficher un « Prêt à rouler » périmé
+  if (ctx.silenceMs > 2500) return { texte: `Plus de nouvelles du rover depuis ${Math.round(ctx.silenceMs / 1000)} s`, niveau: 'alerte', cle: 'silence' };
   const f = e.flags;
   const d = directionMot(commande);
 

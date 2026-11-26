@@ -124,7 +124,13 @@ export class VueCarte extends EventTarget {
     const memo = `${e.x},${e.y},${e.cap},${e.tete},${e.sonar},${e.cibleD},${e.cibleGis},${e.versionOrigine}`;
     if (memo !== this._memoEtat) { this._memoEtat = memo; this.invalide = true; }
     const x = pos.x; const y = pos.y;
-    const cap = (e.cap * Math.PI) / 180; const tete = (e.tete * Math.PI) / 180;
+    // Un cap saturé (±327,67°) ne dit plus rien : on garde le dernier cap fiable au lieu de planter le rover affiché sur 327°.
+    if (!e.capSature) this._capFiable = e.cap;
+    const capDeg = e.capSature ? (this._capFiable ?? 0) : e.cap;
+    this.capSature = !!e.capSature;
+    this.immobile = e.vitesse < 2 && Math.abs(e.cap - (this._capPrec ?? e.cap)) < 0.5 && e.comportement === 0; // seule la tête bouge
+    this._capPrec = e.cap;
+    const cap = (capDeg * Math.PI) / 180; const tete = (e.tete * Math.PI) / 180;
     r.sonar = e.sonar;
     // Avec le lissage, c'est la boucle d'affichage qui déplace le rover image par image (voir _appliquerLissage).
     // Sans lui, ou quand la carte n'est pas à l'écran, on prend la position telle qu'elle arrive.
@@ -133,7 +139,7 @@ export class VueCarte extends EventTarget {
       if (this.trace.ajouter(x, y) && this.couches.trace) this.invalide = true;
     }
     r.ok = true;
-    if (this.lissage) this.lisseur.pousser({ x, y, cap: e.cap, tete: e.tete }, performance.now());
+    if (this.lissage) this.lisseur.pousser({ x, y, cap: capDeg, tete: e.tete }, performance.now());
     if (e.cibleD > 0) {
       const a = cap + (e.cibleGis * Math.PI) / 180;
       this.cible = { x: x + Math.sin(a) * (e.cibleD / 100), y: y + Math.cos(a) * (e.cibleD / 100) };
@@ -336,6 +342,7 @@ export class VueCarte extends EventTarget {
     requestAnimationFrame(this._boucle);
     if (document.hidden) return;
     const maintenant = performance.now();
+    if (this.echos.length) this.echos = this.echos.filter((e) => maintenant - e.t < DUREE_ECHO_MS); // même si la couche des échos est masquée
     const glisse = this._appliquerLissage(maintenant);
     // Économie : on ne redessine que si quelque chose a changé ou s'anime (rover qui glisse, échos, marqueur, suivi).
     const anime = glisse || this.echos.length > 0 || this.marqueur !== null || (this.suivre && this.rover.ok && this._ecartSuivi() > 0.0005);
@@ -354,10 +361,11 @@ export class VueCarte extends EventTarget {
     const a = this.lisseur.lire(maintenant);
     if (!a) return false;
     const r = this.rover;
-    const avant = r.x + r.y + r.cap + r.tete;
+    const x = r.x; const y = r.y; const cap = r.cap; const tete = r.tete;
     r.x = a.x; r.y = a.y; r.cap = (a.cap * Math.PI) / 180; r.tete = (a.tete * Math.PI) / 180;
     if (this.trace.ajouter(r.x, r.y) && this.couches.trace) this.invalide = true; // la trace suit le rover affiché
-    return this.lisseur.actif(maintenant) || avant !== r.x + r.y + r.cap + r.tete;
+    // On ne redessine que si l'image a VRAIMENT changé : un rover immobile (ou en veille) ne fait plus tourner le processeur.
+    return x !== r.x || y !== r.y || cap !== r.cap || tete !== r.tete;
   }
 
   _ecartSuivi() {
@@ -600,19 +608,34 @@ export class VueCarte extends EventTarget {
     ctx.globalAlpha = 1;
   }
 
-  /** Faisceau du sonar : un cône doux qui s'éteint avec la distance, et l'écho marqué à son point d'impact. */
+  /**
+   * Faisceau du sonar : un cône doux qui s'éteint avec la distance, et l'écho marqué à son point d'impact.
+   * La tête balaie en permanence, même rover immobile : pour qu'on voie que c'est la TÊTE qui bouge et pas le rover,
+   * le secteur balayé est tracé en pointillé fixe autour de l'avant du rover, et le cône est bien plus discret à l'arrêt.
+   */
   _dessinerSonar() {
     const { ctx, rover } = this;
-    if (!rover.ok) return;
+    if (!rover.ok || this.veille) return; // en veille, la tête est au repos : rien à montrer
     const a = rover.cap + rover.tete; // angle absolu, horaire à partir de +y
     const mesure = rover.sonar > 0 && rover.sonar < 255;
-    const portee = mesure ? rover.sonar / 100 : PORTEE_SONAR;
+    const calme = !!this.immobile; // rover à l'arrêt : seule la tête bouge
+    const portee = mesure ? rover.sonar / 100 : (calme ? 0.7 : PORTEE_SONAR);
     const capteur = positionSonar(rover.x, rover.y, rover.cap); // le faisceau part du capteur, pas du centre
     const [sx, sy] = this.versEcran(capteur.x, capteur.y);
     const L = portee * this.vue.ppm;
     const ac = a - Math.PI / 2; // angle canvas
     const demi = (7.5 * Math.PI) / 180;
-    const fort = mesure ? 1 : 0.55; // sans écho, le cône est plus pâle
+    const fort = (mesure ? 1 : 0.55) * (calme ? 0.5 : 1);
+    // secteur balayé : fixe par rapport au rover (±70° autour de son avant), très discret
+    const avant = rover.cap - Math.PI / 2; const balayage = (70 * Math.PI) / 180; const Rb = Math.max(14, 0.42 * this.vue.ppm);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(29, 233, 198, 0.2)'; ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.arc(sx, sy, Rb, avant - balayage, avant + balayage); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    for (const sgn of [-1, 1]) { ctx.moveTo(sx + Math.cos(avant + sgn * balayage) * Rb * 0.88, sy + Math.sin(avant + sgn * balayage) * Rb * 0.88); ctx.lineTo(sx + Math.cos(avant + sgn * balayage) * Rb * 1.06, sy + Math.sin(avant + sgn * balayage) * Rb * 1.06); }
+    ctx.stroke();
+    ctx.restore();
     const degrade = ctx.createRadialGradient(sx, sy, 0, sx, sy, Math.max(L, 8));
     degrade.addColorStop(0, `rgba(29, 233, 198, ${0.30 * fort})`);
     degrade.addColorStop(0.55, `rgba(29, 233, 198, ${0.12 * fort})`);
@@ -631,28 +654,6 @@ export class VueCarte extends EventTarget {
       ctx.strokeStyle = 'rgba(29, 233, 198, 0.45)'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(bx, by, 6, 0, Math.PI * 2); ctx.stroke();
     }
-  }
-
-  /** Points de la patrouille : des pastilles numérotées reliées en boucle par un pointillé discret. */
-  _dessinerEtapes() {
-    const { ctx, etapes } = this;
-    if (!etapes.length) return;
-    const pts = etapes.map((p) => this.versEcran(p.x, p.y));
-    ctx.save();
-    if (pts.length > 1) {
-      ctx.strokeStyle = 'rgba(233, 242, 247, 0.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 6]);
-      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      if (pts.length > 2) ctx.closePath(); // en boucle : le dernier point retourne au premier
-      ctx.stroke(); ctx.setLineDash([]);
-    }
-    ctx.font = '600 13px Geist, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    pts.forEach(([px, py], i) => {
-      ctx.fillStyle = 'rgba(5, 11, 18, 0.85)'; ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = COULEURS.sonar; ctx.lineWidth = 1.6; ctx.stroke();
-      ctx.fillStyle = '#e9f2f7'; ctx.fillText(String(i + 1), px, py + 0.5);
-    });
-    ctx.restore();
   }
 
   _dessinerMarqueur() {

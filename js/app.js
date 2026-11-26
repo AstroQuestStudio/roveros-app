@@ -18,6 +18,7 @@ import { poserTexte, poserDonnee } from './utile.js';
 import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
 import { commandesVitesse, limiterVitesse } from './vitesse.js';
 import { MesureLatence } from './latence.js';
+import { normaliser180 } from './lissage.js';
 import { Patrouille, MAX_POINTS, MIN_POINTS } from './patrouille.js';
 import { PORTEE_ALLER_MAX } from './repere.js';
 import { phraseMateriel, materielInquietant } from './materiel.js';
@@ -229,7 +230,7 @@ function surEtatLiaison(t, { etat, message }) {
   if (etat !== 'connecte') {
     pilote.toutArreter();
     diagnostic.reinitialiser();
-    S.veille = false;
+    S.veille = false; carte.veille = false; S.tEtat = 0;
     $('#liaison-signal').dataset.barres = '0';
     latence.reinitialiser();
     poserTexte($('#lat-val'), '— ms');
@@ -262,6 +263,9 @@ setInterval(() => {
   latence.tic();
   afficherDetailLiaison();
 }, 2000);
+
+// Le rover se tait (état plus reçu depuis 2,5 s) : la pastille d'état le dit tout de suite.
+setInterval(() => { if (S.transport?.connecte && S.etat && performance.now() - S.tEtat > 2500) majLigneEtat(S.etat); }, 500);
 
 const barresLatence = (ms) => (ms === null ? 0 : ms < 60 ? 4 : ms < 120 ? 3 : ms < 250 ? 2 : 1);
 
@@ -297,6 +301,7 @@ function surTrame(octets) {
 function surEtat(e) {
   const precedent = S.etat;
   S.etat = e;
+  S.tEtat = performance.now();
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
   if (S.vue === 'bord') bord.majEtat(e, S.modes, carte.positionAbsolue(e) ?? undefined);
@@ -308,7 +313,8 @@ function surEtat(e) {
   jeton.hidden = nomMode === 'Manuel' && !e.flags.urgence; // « Manuel » n'apprend rien : on ne l'affiche pas
   jeton.classList.toggle('actif', e.comportement !== 0);
   poserTexte($('#bar-vitesse'), `${(e.vitesse / 100).toFixed(2).replace('.', ',')} m/s`);
-  poserTexte($('#bar-cap'), `${Math.round(e.cap)}°`);
+  poserTexte($('#bar-cap'), e.capSature ? '?°' : `${Math.round(normaliser180(e.cap))}°`); // toujours entre −180° et 180°
+  if (e.capSature && limiteurMessages.autoriser('cap-sature')) noter('err', "Le cap envoyé par le rover est saturé (au-delà de ±327°) : l'orientation affichée n'est plus fiable", { toast: false });
   majPosition(e, precedent);
   if (S.modes[e.comportement] === 'patrouille') S.enPatrouille = true;
   else if (S.enPatrouille && !patrouille.actif) { S.enPatrouille = false; patrouille.effacer(); majPatrouille(); } // patrouille terminée : on retire les points
@@ -332,6 +338,7 @@ function contexteEtat() {
     mode: nomMode,
     veille: S.veille,
     restant: distanceRestante(),
+    silenceMs: S.tEtat ? performance.now() - S.tEtat : 0,
     formaterDistance,
   };
 }
@@ -376,13 +383,13 @@ function majPosition(e, precedent) {
   const fmt = (v) => v.toFixed(2).replace('.', ',');
   const distBase = Math.hypot(x, y);
   poserTexte($('#bar-pos'), `${fmt(x)} ; ${fmt(y)} m`);
-  $('.stat-cap').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${Math.round(e.cap)}° (base à ${fmt(distBase)} m)`;
+  $('.stat-cap').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${e.capSature ? '?' : Math.round(normaliser180(e.cap))}° (base à ${fmt(distBase)} m)`;
   // Position et carte brusquement remises à zéro sans que nous l'ayons demandé : le rover a été reposé.
   const avant = S.posAbsolue;
   S.posAbsolue = pos;
   if (avant && !S.recalageVoulu) {
     const saut = Math.hypot(avant.x, avant.y);
-    if (saut > 0.3 && distBase < 0.03 && Math.abs(e.cap) < 3 && precedent) signalerRecalage('Le rover a remis sa position à zéro');
+    if (saut > 0.3 && distBase < 0.03 && Math.abs(normaliser180(e.cap)) < 3 && !e.capSature && precedent) signalerRecalage('Le rover a remis sa position à zéro');
   }
 }
 
@@ -442,9 +449,10 @@ function surLigne(texte) {
     case 'param': reglages.majParam(l); surParamRecu(l); break;
     case 'evt':
       // veille et réveil : sobrement, dans la pastille d'état et le journal, sans notification
-      noter('evt', l.message, { toast: !/^(veille|r[ée]veil)/i.test(l.message) });
-      if (/^veille\b/i.test(l.message)) { S.veille = true; majLigneEtat(S.etat); }
-      else if (/^r[ée]veil/i.test(l.message)) { S.veille = false; majLigneEtat(S.etat); }
+      // veille / réveil, et l'écho d'un réglage (« v_max = 0.4 ») : dans le journal seulement, sans notification
+      noter('evt', l.message, { toast: !/^(veille|r[ée]veil)/i.test(l.message) && !/^[a-z_0-9]+ = \S+$/i.test(l.message) });
+      if (/^veille\b/i.test(l.message)) { S.veille = true; carte.veille = true; carte.invalide = true; majLigneEtat(S.etat); }
+      else if (/^r[ée]veil/i.test(l.message)) { S.veille = false; carte.veille = false; carte.invalide = true; majLigneEtat(S.etat); }
       if (/repos[ée]|remises? à zéro/i.test(l.message)) signalerRecalage();
       else if (/carte (effacée|vidée|remise)/i.test(l.message)) carte.effacerCarte(); // la carte arrive « par différences » : on vide aussi la nôtre
       break;

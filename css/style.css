@@ -756,3 +756,12 @@ button.choix:active { transform: scale(0.99); }
   .btn-carre { width: 38px; height: 38px; }
   .carte-outils { gap: 6px; }
 }
+
+/* Portrait : l'avertissement des sécurités prend toute la largeur (sinon son texte se coupe en huit lignes) ;
+   la colonne de boutons de droite descend d'autant. */
+@media (orientation: portrait) {
+  .etat-bloc { right: 10px; max-width: none; }
+  .ligne-etat { max-width: calc(100% - 64px); }
+  .bandeau-securites { max-width: none; width: 100%; }
+  #app:has(.bandeau-securites:not([hidden])) .carte-outils { top: calc(var(--haut) + 66px); }
+}

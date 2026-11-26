@@ -175,7 +175,9 @@ function decoderEtat(o, vue) {
     type: 'etat',
     x: vue.getInt16(1, true), // mm
     y: vue.getInt16(3, true), // mm
-    cap: vue.getInt16(5, true) / 100, // degrés, horaire +
+    cap: vue.getInt16(5, true) / 100, // degrés, horaire + (le cœur ne le ramène pas toujours entre −180° et 180° : voir capSature)
+    // le cap tient sur un entier 16 bits en centièmes de degré : au-delà de ±327,67° il SATURE et ne dit plus rien de fiable
+    capSature: Math.abs(vue.getInt16(5, true)) >= 32766,
     drapeaux,
     flags,
     comportement: o[10], // indice dans la liste « modes »
