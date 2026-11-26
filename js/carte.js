@@ -7,7 +7,8 @@
 // Gestes : un doigt qui glisse déplace la carte, deux doigts pincent pour zoomer, un simple
 // toucher envoie le rover à cet endroit (l'application reçoit l'événement via `surToucher`).
 
-import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, appliquerCarte } from './protocole.js';
+import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, CASE_POSSIBLE, appliquerCarte } from './protocole.js';
+import { boucles, adoucir } from './contours.js';
 import { LARGEUR_ROVER, LONGUEUR_ROVER, positionSonar } from './gabarit.js';
 import { Trace } from './trace.js';
 import { Lisseur } from './lissage.js';
@@ -15,11 +16,15 @@ import { Lisseur } from './lissage.js';
 // Palette de la carte (mêmes tons que l'interface : encre, eau, sable, turquoise du sonar, ambre du rover).
 const COULEURS = {
   fond: '#050b12',
-  grille: 'rgba(140, 220, 235, 0.05)',
-  grilleForte: 'rgba(140, 220, 235, 0.11)',
+  grille: 'rgba(140, 220, 235, 0.035)',
+  grilleForte: 'rgba(140, 220, 235, 0.08)',
   texte: 'rgba(233, 242, 247, 0.78)',
-  libre: [8, 72, 108],
-  occupe: [241, 216, 163],
+  libre: '#0a4a70', // zone libre : surface lisse
+  libreBord: 'rgba(96, 190, 225, 0.30)',
+  possible: 'rgba(214, 192, 142, 0.20)', // prolongement incertain d'un obstacle : discret
+  obstacle: '#c9b585',
+  obstacleBord: 'rgba(52, 38, 14, 0.7)',
+  touche: '#dccca0', // face d'un obstacle touchée par le sonar : à peine plus claire
   sonar: '#1de9c6',
   rover: '#f5a83a',
   trace: '#f6921e',
@@ -54,11 +59,11 @@ export class VueCarte extends EventTarget {
     this.surToucher = surToucher ?? (() => {});
     this.cellule = 0.05; // m, mis à jour par la ligne « info cellule=… »
     this.grille = new Uint8Array(TAILLE_CARTE * TAILLE_CARTE);
-    this.couche = document.createElement('canvas');
-    this.couche.width = this.couche.height = TAILLE_CARTE;
-    this.coucheCtx = this.couche.getContext('2d');
-    this.image = this.coucheCtx.createImageData(TAILLE_CARTE, TAILLE_CARTE);
-    this.sale = true; // la couche doit être recalculée
+    // Les contours lissés de la carte (chemins en « unités de case »), recalculés SEULEMENT quand une ligne change.
+    this.formes = { libre: null, possible: null, obstacle: null, touche: null };
+    this.touches = new Uint8Array(TAILLE_CARTE * TAILLE_CARTE); // cases où un écho du sonar est tombé
+    this._tFormes = 0;
+    this.sale = true; // les contours doivent être recalculés
     this.invalide = true; // il faut redessiner (on ne redessine rien quand rien ne change)
     this.rover = { x: 0, y: 0, cap: 0, tete: 0, sonar: 0, ok: false }; // mètres, radians
     this.lisseur = new Lisseur(); // fait glisser le rover entre deux trames ÉTAT (8 à 20 par seconde)
@@ -90,7 +95,7 @@ export class VueCarte extends EventTarget {
   /** Applique une trame CARTE décodée. */
   appliquerCarte(msg) { if (appliquerCarte(this.grille, msg) > 0) this.sale = this.invalide = true; }
 
-  effacerCarte() { this.grille.fill(0); this.sale = this.invalide = true; }
+  effacerCarte() { this.grille.fill(0); this.touches.fill(0); this.sale = this.invalide = true; }
 
   /** Met à jour la position du rover à partir d'une trame ÉTAT décodée. */
   majEtat(e) {
@@ -118,7 +123,11 @@ export class VueCarte extends EventTarget {
   ajouterPoints(points) {
     const maintenant = performance.now();
     for (const p of points) {
-      if (p.distance > 0) { this.echos.push({ x: p.x / 1000, y: p.y / 1000, t: maintenant }); this.invalide = true; }
+      if (p.distance > 0) {
+        this.echos.push({ x: p.x / 1000, y: p.y / 1000, t: maintenant }); this.invalide = true;
+        const c = Math.floor(p.x / 1000 / this.cellule) + TAILLE_CARTE / 2; const l = Math.floor(p.y / 1000 / this.cellule) + TAILLE_CARTE / 2;
+        if (c >= 0 && c < TAILLE_CARTE && l >= 0 && l < TAILLE_CARTE && !this.touches[l * TAILLE_CARTE + c]) { this.touches[l * TAILLE_CARTE + c] = 1; this.sale = true; }
+      }
     }
     if (this.echos.length > 600) this.echos.splice(0, this.echos.length - 600);
   }
@@ -285,21 +294,57 @@ export class VueCarte extends EventTarget {
     return Math.hypot(this.rover.x - this.vue.cx, this.rover.y - this.decalage * this.hauteur / this.vue.ppm - this.vue.cy);
   }
 
-  /** Reconstruit la petite image 64×64 des cases (ligne 0 = bas de la carte, donc retournée). */
-  _majCouche() {
-    const d = this.image.data;
-    const N = TAILLE_CARTE;
-    for (let l = 0; l < N; l++) {
-      for (let c = 0; c < N; c++) {
-        const v = this.grille[l * N + c];
-        const o = ((N - 1 - l) * N + c) * 4;
-        if (v === CASE_LIBRE) { [d[o], d[o + 1], d[o + 2]] = COULEURS.libre; d[o + 3] = 255; }
-        else if (v === CASE_OCCUPEE) { [d[o], d[o + 1], d[o + 2]] = COULEURS.occupe; d[o + 3] = 255; }
-        else d[o + 3] = 0;
+  /** Reconstruit les contours lissés (libre, possible, obstacles, obstacles touchés). Au plus 8 fois par seconde. */
+  _majFormes() {
+    const maintenant = performance.now();
+    if (maintenant - this._tFormes < 120) { this.invalide = true; return; } // trop tôt : on réessaie à l'image suivante
+    this._tFormes = maintenant;
+    const N = TAILLE_CARTE; const g = this.grille; const touches = this.touches;
+    const touchee = (i) => {
+      const c = i % N; const l = (i - c) / N;
+      return touches[i] || (c > 0 && touches[i - 1]) || (c < N - 1 && touches[i + 1]) || (l > 0 && touches[i - N]) || (l < N - 1 && touches[i + N]);
+    };
+    const chemin = (predicat, iterations) => {
+      const p = new Path2D();
+      for (const b of boucles(g, N, predicat)) {
+        const lisse = adoucir(b, iterations);
+        p.moveTo(lisse[0][0], lisse[0][1]);
+        for (let i = 1; i < lisse.length; i++) p.lineTo(lisse[i][0], lisse[i][1]);
+        p.closePath();
       }
-    }
-    this.coucheCtx.putImageData(this.image, 0, 0);
+      return p;
+    };
+    this.formes.libre = chemin((v) => v === CASE_LIBRE, 3);
+    this.formes.possible = chemin((v) => v === CASE_POSSIBLE, 1);
+    this.formes.obstacle = chemin((v) => v === CASE_OCCUPEE, 2);
+    this.formes.touche = chemin((v, i) => v === CASE_OCCUPEE && !!touchee(i), 2);
     this.sale = false;
+  }
+
+  /** Dessine la carte : zone libre lisse, obstacles à contour net, inconnu = le fond. */
+  _dessinerCarte() {
+    const { ctx, vue } = this;
+    if (this.sale) this._majFormes();
+    if (!this.formes.libre) return;
+    const demi = (TAILLE_CARTE / 2) * this.cellule;
+    const [sx0, sy0] = this.versEcran(-demi, -demi); // coin bas gauche de la carte
+    const k = this.cellule * vue.ppm; // pixels par case
+    const px = 1 / k; // un pixel d'écran, en unités de case
+    ctx.save();
+    ctx.setTransform(this.dpr * k, 0, 0, -this.dpr * k, this.dpr * sx0, this.dpr * sy0);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // zone libre : halo doux, surface, filet clair
+    ctx.strokeStyle = 'rgba(10, 74, 112, 0.35)'; ctx.lineWidth = 5 * px; ctx.stroke(this.formes.libre);
+    ctx.fillStyle = COULEURS.libre; ctx.fill(this.formes.libre, 'nonzero');
+    ctx.strokeStyle = COULEURS.libreBord; ctx.lineWidth = 1.2 * px; ctx.stroke(this.formes.libre);
+    // possible : bien plus discret que les obstacles confirmés
+    ctx.fillStyle = COULEURS.possible; ctx.fill(this.formes.possible, 'nonzero');
+    ctx.strokeStyle = 'rgba(214, 192, 142, 0.35)'; ctx.lineWidth = 1 * px; ctx.stroke(this.formes.possible);
+    // obstacles : formes pleines aux coins adoucis, contour net
+    ctx.fillStyle = COULEURS.obstacle; ctx.fill(this.formes.obstacle, 'nonzero');
+    ctx.fillStyle = COULEURS.touche; ctx.fill(this.formes.touche, 'nonzero');
+    ctx.strokeStyle = COULEURS.obstacleBord; ctx.lineWidth = 1.6 * px; ctx.stroke(this.formes.obstacle);
+    ctx.restore();
   }
 
   dessiner() {
@@ -311,26 +356,13 @@ export class VueCarte extends EventTarget {
       vue.cx += (this.rover.x - vue.cx) * k;
       vue.cy += (this.rover.y - this.decalage * H / vue.ppm - vue.cy) * k;
     }
-    if (this.sale) this._majCouche();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.fillStyle = COULEURS.fond;
     ctx.fillRect(0, 0, W, H);
 
     this._dessinerGrille();
 
-    // Cases de la carte : image 64×64 agrandie sans lissage (carrés nets).
-    const demi = (TAILLE_CARTE / 2) * this.cellule;
-    const [x0, y0] = this.versEcran(-demi, demi);
-    const taille = TAILLE_CARTE * this.cellule * vue.ppm;
-    if (this.couches.carte) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(this.couche, x0, y0, taille, taille);
-      ctx.strokeStyle = 'rgba(140,220,235,0.16)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 5]);
-      ctx.strokeRect(x0 + 0.5, y0 + 0.5, taille, taille);
-      ctx.setLineDash([]);
-    }
+    if (this.couches.carte) this._dessinerCarte();
 
     if (this.couches.base) this._dessinerBase();
     if (this.couches.trace) this._dessinerTrace();
@@ -382,16 +414,33 @@ export class VueCarte extends EventTarget {
     }
   }
 
+  /** Trace du trajet : un trait fin qui s'estompe avec l'âge (pas de gribouillis orange quand le rover tourne). */
   _dessinerTrace() {
     const { ctx } = this;
     const points = this.trace.points;
     if (points.length < 2) return;
+    const maintenant = performance.now();
+    // quatre paliers d'âge : récent (< 8 s) bien visible, puis de plus en plus discret
+    const paliers = [[8000, 0.85, 1.8], [25000, 0.5, 1.5], [80000, 0.28, 1.3], [Infinity, 0.13, 1.1]];
+    const palier = (t) => { const a = maintenant - t; for (let i = 0; i < paliers.length; i++) if (a < paliers[i][0]) return i; return paliers.length - 1; };
     ctx.save();
-    ctx.strokeStyle = COULEURS.trace; ctx.lineWidth = 2.4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.shadowColor = 'rgba(246, 146, 30, 0.45)'; ctx.shadowBlur = 6;
-    ctx.beginPath();
-    points.forEach((p, i) => { const [px, py] = this.versEcran(p.x, p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
-    ctx.stroke();
+    ctx.strokeStyle = COULEURS.trace; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (let pal = paliers.length - 1; pal >= 0; pal--) { // les plus vieux d'abord : le récent reste par-dessus
+      ctx.globalAlpha = paliers[pal][1]; ctx.lineWidth = paliers[pal][2];
+      ctx.beginPath();
+      let enCours = false;
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const [px, py] = this.versEcran(p.x, p.y);
+        if (palier(p.t ?? 0) === pal) {
+          if (!enCours) {
+            if (i > 0) { const q = points[i - 1]; const [qx, qy] = this.versEcran(q.x, q.y); ctx.moveTo(qx, qy); ctx.lineTo(px, py); } else ctx.moveTo(px, py);
+            enCours = true;
+          } else ctx.lineTo(px, py);
+        } else enCours = false;
+      }
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -422,6 +471,7 @@ export class VueCarte extends EventTarget {
     ctx.moveTo(px, py - 16); ctx.lineTo(px, py - 6); ctx.moveTo(px, py + 6); ctx.lineTo(px, py + 16); ctx.stroke();
   }
 
+  /** Échos récents : de petits points qui s'estompent (jamais criards). */
   _dessinerEchos() {
     const { ctx } = this;
     const maintenant = performance.now();
@@ -429,28 +479,44 @@ export class VueCarte extends EventTarget {
     ctx.fillStyle = COULEURS.sonar;
     for (const e of this.echos) {
       const age = (maintenant - e.t) / DUREE_ECHO_MS;
-      ctx.globalAlpha = Math.max(0, 1 - age) * 0.95;
+      ctx.globalAlpha = Math.max(0, 1 - age) * 0.6;
       const [px, py] = this.versEcran(e.x, e.y);
-      ctx.beginPath(); ctx.arc(px, py, 2.6 * (1 - age * 0.4), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, 1.9 * (1 - age * 0.35), 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
   }
 
+  /** Faisceau du sonar : un cône doux qui s'éteint avec la distance, et l'écho marqué à son point d'impact. */
   _dessinerSonar() {
     const { ctx, rover } = this;
     if (!rover.ok) return;
     const a = rover.cap + rover.tete; // angle absolu, horaire à partir de +y
-    const portee = rover.sonar > 0 && rover.sonar < 255 ? rover.sonar / 100 : PORTEE_SONAR;
+    const mesure = rover.sonar > 0 && rover.sonar < 255;
+    const portee = mesure ? rover.sonar / 100 : PORTEE_SONAR;
     const capteur = positionSonar(rover.x, rover.y, rover.cap); // le faisceau part du capteur, pas du centre
     const [sx, sy] = this.versEcran(capteur.x, capteur.y);
     const L = portee * this.vue.ppm;
-    // Sur l'écran, l'angle horaire depuis le haut = angle canvas (depuis +x, horaire) − 90°.
-    const ac = a - Math.PI / 2;
-    const demi = (8 * Math.PI) / 180;
-    ctx.fillStyle = 'rgba(79, 227, 208, 0.13)';
+    const ac = a - Math.PI / 2; // angle canvas
+    const demi = (7.5 * Math.PI) / 180;
+    const fort = mesure ? 1 : 0.55; // sans écho, le cône est plus pâle
+    const degrade = ctx.createRadialGradient(sx, sy, 0, sx, sy, Math.max(L, 8));
+    degrade.addColorStop(0, `rgba(29, 233, 198, ${0.30 * fort})`);
+    degrade.addColorStop(0.55, `rgba(29, 233, 198, ${0.12 * fort})`);
+    degrade.addColorStop(1, 'rgba(29, 233, 198, 0)');
+    ctx.fillStyle = degrade;
     ctx.beginPath(); ctx.moveTo(sx, sy); ctx.arc(sx, sy, L, ac - demi, ac + demi); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = COULEURS.sonar; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + Math.cos(ac) * L, sy + Math.sin(ac) * L); ctx.stroke();
+    // axe du faisceau, très fin
+    const bx = sx + Math.cos(ac) * L; const by = sy + Math.sin(ac) * L;
+    const axe = ctx.createLinearGradient(sx, sy, bx, by);
+    axe.addColorStop(0, `rgba(29, 233, 198, ${0.5 * fort})`); axe.addColorStop(1, 'rgba(29, 233, 198, 0.05)');
+    ctx.strokeStyle = axe; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(bx, by); ctx.stroke();
+    if (mesure) { // l'écho, à son point d'impact
+      ctx.fillStyle = 'rgba(224, 255, 250, 0.95)';
+      ctx.beginPath(); ctx.arc(bx, by, 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(29, 233, 198, 0.45)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(bx, by, 6, 0, Math.PI * 2); ctx.stroke();
+    }
   }
 
   _dessinerMarqueur() {
@@ -469,30 +535,78 @@ export class VueCarte extends EventTarget {
     ctx.beginPath(); ctx.arc(px, py, 3.2, 0, Math.PI * 2); ctx.fill();
   }
 
+  /**
+   * Le rover, vu de dessus, à son gabarit réel (châssis 25 × 20 cm), 4 roues Mecanum avec leurs rouleaux en biais,
+   * le capteur à ultrasons à l'avant (à 9,5 cm devant le centre) qui tourne avec l'angle de tête reçu.
+   * Le devant est en haut du dessin : un chevron et le pare-chocs avant montrent le sens de marche.
+   */
   _dessinerRover() {
     const { ctx, rover } = this;
     if (!rover.ok) return;
     const [px, py] = this.versEcran(rover.x, rover.y);
-    const e = this.vue.ppm; // pixels par mètre : le rover est dessiné à l'échelle
-    const L = LONGUEUR_ROVER * e; const l = LARGEUR_ROVER * e;
+    const e = this.vue.ppm; // pixels par mètre
+    const Lpx = LONGUEUR_ROVER * e;
+    const k = Lpx < 34 ? 34 / Lpx : 1; // très dézoomé : on grossit un peu pour ne pas le perdre
+    const detail = Lpx * k > 46;
+    const demiL = LONGUEUR_ROVER / 2; const demiW = LARGEUR_ROVER / 2;
     ctx.save();
     ctx.translate(px, py);
-    // Halo minimal pour retrouver le rover quand on dézoome beaucoup.
-    if (L < 20) {
-      ctx.strokeStyle = 'rgba(245,168,58,0.5)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke();
-    }
+    if (k > 1) { ctx.strokeStyle = 'rgba(29, 233, 198, 0.35)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.stroke(); }
     ctx.rotate(rover.cap); // la rotation canvas positive = sens horaire : conforme au cap
-    const roue = { l: Math.max(2, l * 0.2), h: Math.max(3, L * 0.26) };
-    ctx.fillStyle = '#1a1e28'; ctx.strokeStyle = COULEURS.rover; ctx.lineWidth = 1.5;
-    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
-      ctx.fillRect(sx * (l / 2) - (sx > 0 ? 0 : roue.l * 0.9), sy * (L / 2 - roue.h * 0.6) - roue.h / 2, roue.l * 0.9, roue.h);
+    ctx.scale(e * k, e * k); // désormais 1 unité = 1 mètre ; le devant est vers −y
+    const fil = 1.2 / (e * k); // un filet d'environ un pixel
+    // ombre portée
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.beginPath(); ctx.roundRect(-demiW + 0.006, -demiL + 0.008, LARGEUR_ROVER, LONGUEUR_ROVER, 0.03); ctx.fill();
+    // roues Mecanum : FG et RD à rouleaux « \ », FD et RG à rouleaux « / »
+    const rx = demiW - 0.015; const ry = 0.076; const wl = 0.07; const ww = 0.03;
+    for (const [sxr, syr] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const cx = sxr * rx; const cy = syr * ry;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.fillStyle = '#04080d';
+      ctx.beginPath(); ctx.roundRect(-ww / 2, -wl / 2, ww, wl, 0.006); ctx.fill();
+      if (detail) {
+        ctx.save();
+        ctx.beginPath(); ctx.roundRect(-ww / 2, -wl / 2, ww, wl, 0.006); ctx.clip();
+        ctx.strokeStyle = 'rgba(150, 215, 230, 0.55)'; ctx.lineWidth = 0.0028;
+        const pente = sxr * syr > 0 ? 1 : -1; // FG(−,−) et RD(+,+) : « \ »
+        for (let t = -wl / 2 - ww; t < wl / 2 + ww; t += 0.0115) {
+          ctx.beginPath(); ctx.moveTo(-ww / 2, t - pente * ww / 2); ctx.lineTo(ww / 2, t + pente * ww / 2); ctx.stroke();
+        }
+        ctx.restore();
+      }
+      ctx.strokeStyle = 'rgba(160, 220, 235, 0.55)'; ctx.lineWidth = fil;
+      ctx.beginPath(); ctx.roundRect(-ww / 2, -wl / 2, ww, wl, 0.006); ctx.stroke();
+      ctx.restore();
     }
-    ctx.fillStyle = '#0b0d14';
-    ctx.beginPath(); ctx.roundRect(-l / 2, -L / 2, l, L, Math.max(2, l * 0.18)); ctx.fill(); ctx.stroke();
-    // flèche d'avant
-    ctx.fillStyle = COULEURS.rover;
-    ctx.beginPath(); ctx.moveTo(0, -L / 2 - Math.max(3, L * 0.16)); ctx.lineTo(l * 0.3, -L * 0.12); ctx.lineTo(-l * 0.3, -L * 0.12); ctx.closePath(); ctx.fill();
+    // châssis
+    const corps = ctx.createLinearGradient(0, -demiL, 0, demiL);
+    corps.addColorStop(0, '#22384c'); corps.addColorStop(1, '#0f1c29');
+    ctx.fillStyle = corps;
+    ctx.beginPath(); ctx.roundRect(-0.072, -demiL + 0.004, 0.144, LONGUEUR_ROVER - 0.008, 0.026); ctx.fill();
+    ctx.strokeStyle = 'rgba(29, 233, 198, 0.85)'; ctx.lineWidth = fil * 1.1; ctx.stroke();
+    if (detail) { // platine : un liseré intérieur
+      ctx.strokeStyle = 'rgba(160, 220, 235, 0.16)'; ctx.lineWidth = fil;
+      ctx.beginPath(); ctx.roundRect(-0.055, -0.1, 0.11, 0.2, 0.014); ctx.stroke();
+    }
+    // pare-chocs avant
+    ctx.fillStyle = 'rgba(29, 233, 198, 0.9)';
+    ctx.beginPath(); ctx.roundRect(-0.045, -demiL + 0.002, 0.09, 0.011, 0.004); ctx.fill();
+    // chevron : le sens de marche
+    ctx.strokeStyle = COULEURS.rover; ctx.lineWidth = 0.007; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-0.032, 0.012); ctx.lineTo(0, -0.034); ctx.lineTo(0.032, 0.012); ctx.stroke();
+    // capteur à ultrasons : sur le devant, tourne avec l'angle de tête
+    ctx.save();
+    ctx.translate(0, -0.095);
+    ctx.rotate(rover.tete);
+    ctx.fillStyle = '#0b141d'; ctx.strokeStyle = 'rgba(29, 233, 198, 0.9)'; ctx.lineWidth = fil * 1.1;
+    ctx.beginPath(); ctx.arc(0, 0, 0.0185, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#dff3f8';
+    for (const dx of [-0.0085, 0.0085]) { ctx.beginPath(); ctx.arc(dx, -0.006, 0.0068, 0, Math.PI * 2); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(29, 233, 198, 0.9)'; ctx.lineWidth = 0.0035;
+    ctx.beginPath(); ctx.moveTo(0, -0.006); ctx.lineTo(0, -0.026); ctx.stroke();
+    ctx.restore();
     ctx.restore();
   }
 

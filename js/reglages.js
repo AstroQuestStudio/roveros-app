@@ -17,6 +17,17 @@ export function pasCurseur(min, max) {
   return e * 10;
 }
 
+/** Explications courtes de quelques paramètres (affichées sous leur nom). */
+export const DESCRIPTIONS = {
+  vue_large: "Vue d'ensemble du sonar à la manette : toutes les N secondes, la tête balaie large (0 = jamais)",
+  v_aveugle_man: "Vitesse maximale à la manette vers un côté que la tête ne regarde pas (marche arrière, côté), sécurités actives",
+  reflexe: "1 = le rover ralentit et s'arrête devant ce que voit le sonar",
+  carte_on: "1 = la carte d'obstacles sert à ralentir et à interdire les pivots près d'un mur",
+  v_max: 'Vitesse maximale, en m/s',
+  v_rapide: "Vitesse que le rover s'autorise quand le sonar voit la voie libre, en m/s",
+  w_max: 'Rotation maximale, en rad/s',
+};
+
 const formatNombre = (v) => String(Math.round(v * 1e6) / 1e6);
 
 export class Reglages {
@@ -78,7 +89,8 @@ export class Reglages {
       <label class="param-nom" for="p-${echapper(p.nom)}">${echapper(p.nom)}</label>
       <input class="param-nombre" id="p-${echapper(p.nom)}" type="number" inputmode="decimal" step="any" aria-label="Valeur de ${echapper(p.nom)}">
       <input class="param-curseur" type="range" aria-label="Curseur de ${echapper(p.nom)}">
-      <span class="param-borne param-min"></span><span class="param-borne param-max"></span>`;
+      <span class="param-borne param-min"></span><span class="param-borne param-max"></span>
+      ${DESCRIPTIONS[p.nom] ? `<span class="param-desc">${echapper(DESCRIPTIONS[p.nom])}</span>` : ''}`;
     const nombre = ligne.querySelector('.param-nombre');
     const curseur = ligne.querySelector('.param-curseur');
     // Le curseur envoie pendant le glissement (au plus 6 fois par seconde) et à la fin.

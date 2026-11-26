@@ -66,19 +66,20 @@
       </div>
       <button type="button" class="stat stat-batt" id="entete-batt" hidden title="Batterie du rover : ouvrir le tableau de bord" data-vue-lien="bord">
         <span class="ico-batt" id="entete-batt-ico"></span>
-        <span class="stat-textes"><span class="stat-nom">Batterie</span><span class="stat-val"><span id="entete-batt-pct" class="chiffres">—</span><span id="entete-batt-v" class="chiffres stat-sous">—</span></span></span>
+        <span class="stat-textes"><span class="stat-val"><span id="entete-batt-pct" class="chiffres">—</span><span id="entete-batt-v" class="chiffres stat-sous">—</span></span></span>
       </button>
       <div class="stat stat-lat" title="Temps aller-retour avec le rover (PING / PONG)">
         <span id="liaison-signal" class="signal" data-barres="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-        <span class="stat-textes"><span class="stat-nom">Latence</span><span class="stat-val"><span id="lat-val" class="chiffres">— ms</span></span></span>
+        <span class="stat-textes"><span class="stat-val"><span id="lat-val" class="chiffres">— ms</span></span></span>
       </div>
-      <div class="stat stat-vit stat-paysage" title="Vitesse actuelle du rover">
+      <button type="button" class="stat stat-vit stat-paysage" title="Vitesse du rover (touchez pour choisir la vitesse maximale)" aria-label="Vitesse : choisir la vitesse maximale">
         <span class="ico-slot stat-ico" data-icone="vitesse"></span>
-        <span class="stat-textes"><span class="stat-nom">Vitesse</span><span class="stat-val"><span id="bar-vitesse" class="chiffres">0,00 m/s</span></span></span>
-      </div>
-      <div class="stat stat-cap stat-paysage" title="Cap estimé par le rover">
+        <span class="stat-textes"><span class="stat-val"><span id="bar-vitesse" class="chiffres">0,00 m/s</span><span id="bar-vmax" class="chiffres stat-sous" title="Vitesse maximale choisie">max 0,4</span></span></span>
+        <span class="point-alerte" id="vit-alerte" hidden></span>
+      </button>
+      <div class="stat stat-cap stat-paysage" title="Là où le rover croit être : cap et position">
         <span class="ico-slot stat-ico" data-icone="cap"></span>
-        <span class="stat-textes"><span class="stat-nom">Cap</span><span class="stat-val"><span id="bar-cap" class="chiffres">0°</span></span></span>
+        <span class="stat-textes"><span class="stat-val"><span id="bar-cap" class="chiffres">0°</span><span id="bar-pos" class="chiffres stat-sous">0,00 ; 0,00 m</span></span></span>
       </div>
     </div>
   </header>
@@ -112,13 +113,11 @@
           <button type="button" class="bandeau-bouton" id="btn-securites-remettre">Remettre</button>
         </div>
         <div class="ligne-etat" id="ligne-etat" data-niveau="neutre" role="status" aria-live="polite">
-          <span class="ico-slot ligne-etat-manette" data-icone="manette"></span>
           <span class="ligne-etat-point" aria-hidden="true"></span>
           <span class="ligne-etat-texte" id="ligne-etat-texte">Pas de rover connecté</span>
         </div>
         <div class="carte-info" aria-live="off">
           <span class="jeton" id="info-mode" hidden>Manuel</span>
-          <span class="jeton discret chiffres" id="info-pos" title="Là où le rover croit être">0,00 ; 0,00 m</span>
           <span class="jeton alerte ambre" id="info-perdu" hidden>Position remise à zéro</span>
           <span class="jeton alerte ambre" id="info-repere" hidden>Manette = repère de la carte</span>
         </div>
@@ -126,15 +125,14 @@
 
       <!-- En haut à droite : recentrer, couches, base, zoom -->
       <div class="carte-outils">
-        <button type="button" id="btn-recentrer" class="pilule-bouton actif" aria-label="Recentrer sur le rover"><span class="ico-slot" data-icone="recentrer"></span><span class="pilule-texte">Recentrer</span></button>
+        <button type="button" id="btn-recentrer" class="btn-carre actif" aria-label="Recentrer sur le rover" title="Recentrer sur le rover"><span class="ico-slot" data-icone="recentrer"></span></button>
         <div class="couches-menu">
-          <button type="button" id="btn-couches" class="pilule-bouton paysage-seul" aria-haspopup="true" aria-expanded="false"><span class="ico-slot" data-icone="couches"></span><span class="pilule-texte">Couches</span><span class="ico-slot chevron" data-icone="chevronBas"></span></button>
+          <button type="button" id="btn-couches" class="btn-carre paysage-seul" aria-haspopup="true" aria-expanded="false" aria-label="Couches de la carte" title="Couches de la carte"><span class="ico-slot" data-icone="couches"></span></button>
           <div class="menu-flottant menu-couches" id="menu-couches" hidden></div>
         </div>
         <button type="button" id="btn-base" class="btn-carre" aria-label="Je suis à la base : redéfinir la base ici" title="Je suis à la base : le rover repart de zéro, carte vide"><span class="ico-slot" data-icone="base"></span></button>
         <div class="zoom-groupe">
           <button type="button" id="btn-zoom-plus" class="btn-carre" aria-label="Zoom avant"></button>
-          <span class="zoom-nom">Zoom</span>
           <button type="button" id="btn-zoom-moins" class="btn-carre" aria-label="Zoom arrière"></button>
         </div>
       </div>
@@ -174,6 +172,17 @@
         </div>
       </div>
 
+      <!-- Patrouille : on touche les points sur la carte (6 au plus), puis Lancer -->
+      <div class="patrouille" id="patrouille" hidden role="dialog" aria-label="Patrouille par points">
+        <p class="patrouille-texte" id="patrouille-texte">Touchez jusqu'à 6 points sur la carte.</p>
+        <div class="deck-commandes">
+          <button type="button" id="pat-lancer" class="bouton plein" disabled>Lancer</button>
+          <button type="button" id="pat-annuler" class="bouton">Retirer le dernier</button>
+          <button type="button" id="pat-effacer" class="bouton">Effacer</button>
+          <button type="button" id="pat-fermer" class="bouton discret-bouton">Fermer</button>
+        </div>
+      </div>
+
       <!-- Tiroir des réglages rapides : vitesse, sécurités, couches, navigation. Fermé par défaut. -->
       <div class="tiroir" id="tiroir" hidden role="dialog" aria-label="Réglages rapides">
         <div class="tiroir-titre">Vitesse maximale <output id="vitesse-pilotage" class="chiffres">0,40 m/s</output></div>
@@ -192,6 +201,10 @@
           <button type="button" id="btn-incliner" class="bascule" aria-pressed="false"><span class="ico-slot" data-icone="incliner"></span><span>Incliner</span></button>
           <button type="button" id="btn-stop" class="bascule bascule-stop"><span class="ico-slot" data-icone="arret"></span><span>Stop</span></button>
         </div>
+        <div class="deck-commandes deck-patrouille">
+          <button type="button" id="btn-patrouille" class="bascule" aria-describedby="patrouille-aide"><span class="ico-slot" data-icone="patrouille"></span><span>Patrouille par points</span></button>
+        </div>
+        <p class="tiroir-aide" id="patrouille-aide" hidden></p>
         <div class="tiroir-couches" id="tiroir-couches" aria-label="Couches de la carte"></div>
         <div class="tiroir-nav" aria-label="Autres écrans">
           <button type="button" data-vue="modes"><span class="ico-slot" data-icone="modes"></span><span>Modes</span></button>
@@ -241,6 +254,12 @@
         </div>
         <h2>État du rover</h2>
         <ul class="drapeaux" id="b-drapeaux"><li class="drapeau neutre">En attente du rover</li></ul>
+        <h2>Matériel du rover</h2>
+        <p class="aide">Temps de calcul, retards et erreurs. Se met à jour à la demande.</p>
+        <div class="materiel" id="b-materiel-boite">
+          <p class="materiel-ligne" id="b-materiel">Pas encore demandé.</p>
+          <button type="button" class="bouton" id="btn-materiel">Actualiser</button>
+        </div>
         <h2>Radar de la tête</h2>
         <div class="radar-carte"><canvas id="radar-canvas" aria-label="Radar polaire de la tête du sonar"></canvas></div>
       </div>
@@ -285,6 +304,19 @@
           <input id="vitesse" type="range" min="0.15" max="1" step="0.05" value="0.4" aria-label="Vitesse maximale en mètres par seconde">
         </label>
         <p class="aide">Règle la vitesse maximale et la rotation du rover (comme pour une voiture radiocommandée). Plus fin : cherchez <em>v_max</em>, <em>v_rapide</em>, <em>w_max</em> et <em>v_aveugle_man</em> (vitesse maximale vers un côté que la tête ne regarde pas, sécurités actives) dans les paramètres plus bas.</p>
+
+        <h2>Semi-veille</h2>
+        <p class="aide">Quand rien ne se passe, le rover met la tête et les moteurs au repos pour économiser la batterie ; il se réveille tout seul à la moindre commande. Choisissez au bout de combien de temps (0 = jamais).</p>
+        <div class="seg large" id="seg-veille" role="group" aria-label="Délai avant la semi-veille">
+          <button type="button" data-s="0">Jamais</button>
+          <button type="button" data-s="30">30 s</button>
+          <button type="button" data-s="60">1 min</button>
+          <button type="button" data-s="300">5 min</button>
+        </div>
+        <label class="reglage-ligne">
+          <span>Autre délai, en secondes</span>
+          <span class="champ-ligne"><input id="veille-s" type="number" min="0" max="3600" step="5" inputmode="numeric" aria-label="Délai de veille en secondes" placeholder="0 = jamais"><button type="button" class="bouton" id="veille-ok">Envoyer</button></span>
+        </label>
 
         <h2>Confort</h2>
         <div class="interrupteurs">
@@ -349,10 +381,7 @@
     </span>
   </button>
 
-  <!-- Pastille de vitesse (menu replié) et poignée du tiroir (portrait) : ouvrent les réglages rapides -->
-  <button type="button" id="btn-vitesse-pastille" class="pastille-vitesse" aria-haspopup="dialog" aria-label="Choisir la vitesse">
-    <span class="ico-slot" data-icone="vitesse"></span><span class="pastille-nom">Vitesse</span><output id="vitesse-pastille" class="chiffres">0,40 m/s</output><span class="point-alerte" id="pastille-alerte" hidden></span>
-  </button>
+  <!-- Poignée du tiroir (portrait) : ouvre les réglages rapides ; en paysage, c'est la vitesse de la barre du haut -->
   <button type="button" id="btn-poignee" class="poignee" aria-expanded="false" aria-controls="tiroir" aria-label="Réglages rapides : vitesse, sécurités, écrans">
     <span class="ico-slot" data-icone="chevronHaut"></span><span class="point-alerte" id="poignee-alerte" hidden></span>
   </button>

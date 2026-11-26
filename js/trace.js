@@ -17,7 +17,7 @@ export class Trace {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
     const dernier = this.points[this.points.length - 1];
     if (dernier && Math.hypot(x - dernier.x, y - dernier.y) < this.espacement) return false;
-    this.points.push({ x, y });
+    this.points.push({ x, y, t: performance.now() });
     if (this.points.length > this.max) this.points.splice(0, this.points.length - this.max);
     return true;
   }

@@ -39,6 +39,7 @@ export const TAILLE_CARTE = 64;
 export const CASE_INCONNUE = 0;
 export const CASE_LIBRE = 1;
 export const CASE_OCCUPEE = 2;
+export const CASE_POSSIBLE = 3; // prolongement incertain d'un obstacle (si le rover l'envoie)
 
 /** Les 18 drapeaux de la trame ÉTAT : numéro de bit -> nom. */
 export const NOMS_DRAPEAUX = [

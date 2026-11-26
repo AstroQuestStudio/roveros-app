@@ -45,6 +45,7 @@ const ICONES = {
   alerte: '<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.4v.01"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.8v.01"/>',
   // --- interface de pilotage ---
+  patrouille: '<circle cx="6" cy="17" r="2.2"/><circle cx="18" cy="17" r="2.2"/><circle cx="12" cy="6" r="2.2"/><path d="M10.9 8l-3.6 7M13.1 8l3.6 7M8.4 17h7.2" stroke-dasharray="2 2"/>',
   carte: '<path d="M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2z"/><path d="M9 4.5v13M15 6.5v13"/>',
   couches: '<path d="M12 4l8.5 4.5L12 13 3.5 8.5z"/><path d="M3.5 12.5L12 17l8.5-4.5"/><path d="M3.5 16.5L12 21l8.5-4.5"/>',
   vitesse: '<path d="M4.5 17a7.5 7.5 0 1 1 15 0"/><path d="M12 17l3.6-5"/><path d="M4 20h16"/>',
@@ -75,6 +76,7 @@ export const MODES_FR = {
   mur: { libelle: 'Longer le mur', aide: 'Suit le mur à 30 cm', icone: 'mur' },
   slalom: { libelle: 'Slalom', aide: 'Avance en zigzag', icone: 'slalom' },
   calibrer: { libelle: 'Calibrer', aide: 'Étalonne le gyroscope', icone: 'calibrer' },
+  patrouille: { libelle: 'Patrouille', aide: 'Enchaîne des points en boucle', icone: 'patrouille' },
   arret: { libelle: 'Arrêter', aide: 'Stoppe le comportement en cours', icone: 'arret' },
   manuel: { libelle: 'Manuel', aide: 'Pilotage à la main', icone: 'manuel' },
 };

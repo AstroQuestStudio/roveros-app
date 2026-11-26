@@ -235,7 +235,6 @@ function surEtatLiaison(t, { etat, message }) {
     S.verifSecurites = true; // les sécurités obstacles sont remises en service si on les trouve coupées
     setTimeout(() => { S.verifSecurites = false; }, 20000); // la liste des paramètres met quelques secondes à arriver
     noter('app', `Connecté : ${nomLiaison(t)}`, { toast: false });
-    afficherToast('evt', `Connecté : ${nomLiaison(t)}`);
     // Au départ on demande tout : identité + comportements, puis les paramètres.
     setTimeout(() => { if (S.transport === t && t.connecte) { t.envoyer(encoderTexte('infos')); t.envoyer(encoderTexte('params')); } }, 250);
     setTimeout(() => { if (S.transport === t && t.connecte) envoyerVitesse(true); }, 500);
@@ -329,7 +328,7 @@ function majLigneEtat(e) {
   const r = diagnostic.traiter(e, contexteEtat());
   afficherLigne(r.ligne);
   if (r.annonce) {
-    afficherToast(r.annonce.niveau === 'danger' ? 'err' : 'evt', r.annonce.texte);
+    noter(r.annonce.niveau === 'danger' ? 'err' : 'evt', r.annonce.texte, { toast: false }); // la pastille d'état le dit déjà : journal et vibration seulement
     vibrer(r.annonce.niveau === 'danger' ? [60, 40, 60] : 30); // une seule fois : l'anti-doublon est dans le diagnostic
   }
 }
@@ -342,8 +341,8 @@ function majPosition(e, precedent) {
   const x = e.x / 1000; const y = e.y / 1000;
   const fmt = (v) => v.toFixed(2).replace('.', ',');
   const distBase = Math.hypot(x, y);
-  poserTexte($('#info-pos'), `${fmt(x)} ; ${fmt(y)} m · cap ${Math.round(e.cap)}°`);
-  $('#info-pos').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${Math.round(e.cap)}° (base à ${fmt(distBase)} m)`;
+  poserTexte($('#bar-pos'), `${fmt(x)} ; ${fmt(y)} m`);
+  $('.stat-cap').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${Math.round(e.cap)}° (base à ${fmt(distBase)} m)`;
   // Position et carte brusquement remises à zéro sans que nous l'ayons demandé : le rover a été reposé.
   if (precedent && !S.recalageVoulu) {
     const saut = Math.hypot(precedent.x / 1000, precedent.y / 1000);
@@ -642,7 +641,7 @@ function regleVitesse(v, envoyer = true) {
   $('#vitesse').value = v;
   poserTexte($('#vitesse-val'), texteVitesse(v));
   poserTexte($('#vitesse-pilotage'), texteVitesse(v));
-  poserTexte($('#vitesse-pastille'), texteVitesse(v));
+  poserTexte($('#bar-vmax'), `max ${v.toFixed(2).replace('.', ',').replace(/0$/, '')}`);
   $$('#seg-vitesse button').forEach((b) => b.classList.toggle('actif', Math.abs(Number(b.dataset.v) - v) < 0.005));
   if (envoyer) envoyerVitesse();
 }
@@ -660,7 +659,6 @@ function tiroir(ouvert) {
 }
 const basculerTiroir = () => { tiroir($('#tiroir').hidden); vibrer(8); };
 $('#btn-poignee').addEventListener('click', basculerTiroir);
-$('#btn-vitesse-pastille').addEventListener('click', basculerTiroir);
 $('.stat-vit').addEventListener('click', basculerTiroir);
 // Poser un doigt sur une manette, ou toucher la carte, referme le tiroir : on veut conduire, pas régler.
 for (const id of ['#zone-xy', '#zone-rot']) $(id).addEventListener('pointerdown', () => { if (!$('#tiroir').hidden) tiroir(false); }, true);
@@ -777,7 +775,7 @@ function majSecurites() {
   const bandeau = $('#bandeau-securites');
   bandeau.hidden = !coupees;
   $('#poignee-alerte').hidden = !coupees;
-  $('#pastille-alerte').hidden = !coupees;
+  $('#vit-alerte').hidden = !coupees;
   if (coupees) {
     poserTexte($('#bandeau-texte'), etat === 'partielles'
       ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
