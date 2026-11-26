@@ -44,6 +44,16 @@ const ICONES = {
   ok: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   alerte: '<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.4v.01"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.8v.01"/>',
+  // --- interface de pilotage ---
+  carte: '<path d="M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2z"/><path d="M9 4.5v13M15 6.5v13"/>',
+  couches: '<path d="M12 4l8.5 4.5L12 13 3.5 8.5z"/><path d="M3.5 12.5L12 17l8.5-4.5"/><path d="M3.5 16.5L12 21l8.5-4.5"/>',
+  vitesse: '<path d="M4.5 17a7.5 7.5 0 1 1 15 0"/><path d="M12 17l3.6-5"/><path d="M4 20h16"/>',
+  cap: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5l3.8 8.5H8.2z"/>',
+  manette: '<path d="M7 8h10a4 4 0 0 1 3.9 4.8l-.8 4a2.3 2.3 0 0 1-4 1L14.5 16h-5l-1.6 1.8a2.3 2.3 0 0 1-4-1l-.8-4A4 4 0 0 1 7 8z"/><path d="M8 10.5v3M6.5 12h3"/><circle cx="15.5" cy="11" r=".6"/><circle cx="17.5" cy="13" r=".6"/>',
+  chevronBas: '<path d="M6 9.5l6 6 6-6"/>',
+  chevronHaut: '<path d="M6 14.5l6-6 6 6"/>',
+  replier: '<path d="M12.5 6.5l-6 5.5 6 5.5M18.5 6.5l-6 5.5 6 5.5"/>',
+  deployer: '<path d="M11.5 6.5l6 5.5-6 5.5M5.5 6.5l6 5.5-6 5.5"/>',
 };
 
 /** Renvoie le code d'une icône sous forme de <svg>. taille en pixels (CSS). */

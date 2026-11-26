@@ -9,18 +9,19 @@
 
 import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, appliquerCarte } from './protocole.js';
 import { LARGEUR_ROVER, LONGUEUR_ROVER, positionSonar } from './gabarit.js';
+import { Trace } from './trace.js';
 
 // Palette de la carte (mêmes tons que l'interface : encre, eau, sable, turquoise du sonar, ambre du rover).
 const COULEURS = {
-  fond: '#07080d',
-  grille: 'rgba(238, 240, 245, 0.05)',
-  grilleForte: 'rgba(238, 240, 245, 0.11)',
-  texte: 'rgba(238, 240, 245, 0.7)',
-  libre: [16, 48, 72],
-  occupe: [217, 199, 154],
-  sonar: '#4fe3d0',
+  fond: '#050b12',
+  grille: 'rgba(140, 220, 235, 0.05)',
+  grilleForte: 'rgba(140, 220, 235, 0.11)',
+  texte: 'rgba(233, 242, 247, 0.78)',
+  libre: [8, 72, 108],
+  occupe: [241, 216, 163],
+  sonar: '#1de9c6',
   rover: '#f5a83a',
-  trace: 'rgba(245, 168, 58, 0.5)',
+  trace: '#f6921e',
   chemin: '#eef0f5',
   cible: '#eef0f5',
   marqueur: '#eef0f5',
@@ -59,7 +60,8 @@ export class VueCarte extends EventTarget {
     this.sale = true; // la couche doit être recalculée
     this.invalide = true; // il faut redessiner (on ne redessine rien quand rien ne change)
     this.rover = { x: 0, y: 0, cap: 0, tete: 0, sonar: 0, ok: false }; // mètres, radians
-    this.trace = [];
+    this.trace = new Trace(); // l'historique des positions annoncées par le rover (2 000 points, un tous les 2 cm)
+    this.couches = { carte: true, trace: true, echos: true, chemin: true, base: true }; // ce qui est dessiné
     this.echos = [];
     this.chemin = [];
     this.cible = null;
@@ -93,11 +95,7 @@ export class VueCarte extends EventTarget {
     if (memo !== this._memoEtat) { this._memoEtat = memo; this.invalide = true; }
     r.x = e.x / 1000; r.y = e.y / 1000; r.cap = (e.cap * Math.PI) / 180;
     r.tete = (e.tete * Math.PI) / 180; r.sonar = e.sonar; r.ok = true;
-    const dern = this.trace[this.trace.length - 1];
-    if (!dern || Math.hypot(r.x - dern.x, r.y - dern.y) > 0.03) {
-      this.trace.push({ x: r.x, y: r.y });
-      if (this.trace.length > 2000) this.trace.shift();
-    }
+    if (this.trace.ajouter(r.x, r.y) && this.couches.trace) this.invalide = true;
     if (e.cibleD > 0) {
       const a = r.cap + (e.cibleGis * Math.PI) / 180;
       this.cible = { x: r.x + Math.sin(a) * (e.cibleD / 100), y: r.y + Math.cos(a) * (e.cibleD / 100) };
@@ -119,7 +117,7 @@ export class VueCarte extends EventTarget {
   retirerMarqueur() { this.marqueur = null; this.invalide = true; }
 
   /** Après « recaler » : nouvelle origine, tout l'historique géométrique est caduc. */
-  reinitialiserTrajet() { this.trace = []; this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
+  reinitialiserTrajet() { this.trace.effacer(); this.echos = []; this.chemin = []; this.marqueur = null; this.cible = null; this.invalide = true; }
 
   // ---------- Vue ----------
 
@@ -292,20 +290,21 @@ export class VueCarte extends EventTarget {
     const demi = (TAILLE_CARTE / 2) * this.cellule;
     const [x0, y0] = this.versEcran(-demi, demi);
     const taille = TAILLE_CARTE * this.cellule * vue.ppm;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.couche, x0, y0, taille, taille);
-    ctx.strokeStyle = 'rgba(238,240,245,0.16)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 5]);
-    ctx.strokeRect(x0 + 0.5, y0 + 0.5, taille, taille);
-    ctx.setLineDash([]);
+    if (this.couches.carte) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this.couche, x0, y0, taille, taille);
+      ctx.strokeStyle = 'rgba(140,220,235,0.16)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 5]);
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, taille, taille);
+      ctx.setLineDash([]);
+    }
 
-    this._dessinerBase();
-    this._dessinerTrace();
-    this._dessinerChemin();
+    if (this.couches.base) this._dessinerBase();
+    if (this.couches.trace) this._dessinerTrace();
+    if (this.couches.chemin) this._dessinerChemin();
     this._dessinerCible();
-    this._dessinerEchos();
-    this._dessinerSonar();
+    if (this.couches.echos) { this._dessinerEchos(); this._dessinerSonar(); }
     this._dessinerMarqueur();
     this._dessinerRover();
     this._dessinerEchelle();
@@ -352,12 +351,16 @@ export class VueCarte extends EventTarget {
   }
 
   _dessinerTrace() {
-    const { ctx, trace } = this;
-    if (trace.length < 2) return;
-    ctx.strokeStyle = COULEURS.trace; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const { ctx } = this;
+    const points = this.trace.points;
+    if (points.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = COULEURS.trace; ctx.lineWidth = 2.4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(246, 146, 30, 0.45)'; ctx.shadowBlur = 6;
     ctx.beginPath();
-    trace.forEach((p, i) => { const [px, py] = this.versEcran(p.x, p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+    points.forEach((p, i) => { const [px, py] = this.versEcran(p.x, p.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
     ctx.stroke();
+    ctx.restore();
   }
 
   _dessinerChemin() {

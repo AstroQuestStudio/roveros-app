@@ -17,6 +17,7 @@ import { icone, MODES_FR, libelleMode } from './icones.js';
 import { poserTexte, poserDonnee } from './utile.js';
 import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
 import { commandesVitesse, limiterVitesse } from './vitesse.js';
+import { MesureLatence } from './latence.js';
 
 const $ = (sel, racine = document) => racine.querySelector(sel);
 const $$ = (sel, racine = document) => [...racine.querySelectorAll(sel)];
@@ -33,7 +34,6 @@ const S = {
   info: {},
   etat: null, // dernière trame ÉTAT décodée
   urgence: { actif: false, essais: 0 },
-  ping: { n: 0, envoyes: new Map(), ms: null, dernierPong: 0 },
   journal: [],
   cote: 0.5,
   vue: 'pilotage',
@@ -46,10 +46,10 @@ const S = {
 
 function injecterIcones() {
   $$('[data-icone]').forEach((el) => {
-    const taille = el.classList.contains('choix-ico') ? 24 : el.closest('.onglets') ? 22 : 18;
+    const taille = el.classList.contains('choix-ico') ? 24 : el.closest('.onglets, .tiroir-nav') ? 22 : 18;
     el.innerHTML = icone(el.dataset.icone, taille);
   });
-  const parId = { 'btn-journal': 'journal', 'btn-recentrer': 'recentrer', 'btn-zoom-plus': 'plus', 'btn-zoom-moins': 'moins', 'btn-dispo': 'dispo', 'cx-fermer': 'fermer', 'jr-fermer': 'fermer' };
+  const parId = { 'btn-zoom-plus': 'plus', 'btn-zoom-moins': 'moins', 'cx-fermer': 'fermer', 'jr-fermer': 'fermer' };
   for (const [id, nom] of Object.entries(parId)) $(`#${id}`).insertAdjacentHTML('afterbegin', icone(nom, 22));
   $('#entete-batt-ico').innerHTML = icone('batterie', 18);
 }
@@ -113,6 +113,7 @@ $('#btn-journal').addEventListener('click', () => {
   S.nonLus = 0; $('#journal-pastille').hidden = true; $('#journal-pastille').classList.remove('erreur');
   rendreJournal(); ouvrirFeuille($('#dlg-journal'));
 });
+$('#btn-journal-reglages').addEventListener('click', () => $('#btn-journal').click());
 $('#jr-fermer').addEventListener('click', () => fermerFeuilles());
 $('#jr-effacer').addEventListener('click', () => { S.journal.length = 0; rendreJournal(); });
 
@@ -142,23 +143,17 @@ const reglages = new Reglages({
 $('#btn-recentrer').addEventListener('click', () => carte.recentrer());
 $('#btn-zoom-plus').addEventListener('click', () => carte.zoomer(1.4));
 $('#btn-zoom-moins').addEventListener('click', () => carte.zoomer(1 / 1.4));
-/** L'échelle de la carte se pose au-dessus des commandes qui flottent par-dessus. */
+/** L'échelle de la carte se pose en bas à gauche, à la hauteur de la pilule d'arrêt d'urgence. */
 function placerEchelle() {
   const cr = $('#carte').getBoundingClientRect();
   if (!cr.height) return;
-  let haut = cr.bottom;
-  const obstacles = paysage.matches ? [$('.deck-barre')] : [$('.deck-barre'), $('.deck-panneau'), $('#zone-xy'), $('#zone-rot')];
-  for (const el of obstacles) {
-    const r = el.getBoundingClientRect();
-    if (r.height && r.left < cr.left + 130 && r.right > cr.left + 8) haut = Math.min(haut, r.top);
-  }
-  carte.margeBas = Math.max(0, cr.bottom - haut);
+  carte.margeBas = paysage.matches ? Math.round(Math.max(24, cr.height * 0.05)) : 40;
   carte.invalide = true;
 }
 window.addEventListener('resize', placerEchelle);
 // En paysage, les manettes et réglages recouvrent le bas de la carte : on remonte le rover.
 const paysage = window.matchMedia('(orientation: landscape)');
-const regleDecalage = () => { carte.decalage = paysage.matches ? 0.22 : 0.2; };
+const regleDecalage = () => { carte.decalage = paysage.matches ? -0.12 : -0.04; }; // le rover se place au milieu de l'écran, entre la barre et les manettes
 regleDecalage(); paysage.addEventListener('change', regleDecalage);
 carte.addEventListener('vue', (ev) => $('#btn-recentrer').classList.toggle('actif', ev.detail.suivre));
 
@@ -216,15 +211,18 @@ function nomLiaison(t) {
 function surEtatLiaison(t, { etat, message }) {
   const puce = $('#btn-liaison');
   puce.dataset.etat = etat;
-  $('#liaison-texte').textContent = etat === 'connecte' ? nomLiaison(t) : LIBELLES_ETAT[etat];
-  $('#liaison-detail').textContent = etat === 'connecte' ? 'Liaison établie' : (message || (etat === 'deconnecte' ? 'Touchez pour vous connecter' : ''));
+  poserTexte($('#liaison-texte'), etat === 'connecte' ? nomLiaison(t) : LIBELLES_ETAT[etat]);
+  puce.title = etat === 'connecte' ? 'Liaison établie' : (message || (etat === 'deconnecte' ? 'Touchez pour vous connecter' : ''));
+  majMenuRover();
   $('#carte-vide').hidden = etat === 'connecte' || carte.rover.ok;
   if (etat !== 'connecte') {
     pilote.toutArreter();
     diagnostic.reinitialiser();
     $('#liaison-signal').dataset.barres = '0';
-    S.ping.ms = null;
-  }
+    latence.reinitialiser();
+    poserTexte($('#lat-val'), '— ms');
+    poserTexte($('#bar-vitesse'), '0,00 m/s');
+  } else latence.reinitialiser();
   if (etat === 'erreur') noter('err', message || 'Liaison perdue');
   else if (etat !== 'connexion') noter('app', `Liaison : ${LIBELLES_ETAT[etat].toLowerCase()}${message && etat !== 'deconnecte' ? ` (${message})` : ''}`, { toast: false });
   majVerrouEcran();
@@ -245,22 +243,24 @@ function surEtatLiaison(t, { etat, message }) {
   }
 }
 
+// Latence = temps aller-retour PING / PONG, mesuré toutes les 2 s (une seule petite trame : aucune gêne pour les commandes).
+const latence = new MesureLatence({ envoyer: (trame) => S.transport?.envoyer(trame) ?? false });
 setInterval(() => {
   const t = S.transport;
   if (!t?.connecte) return;
-  S.ping.n = (S.ping.n + 1) & 255;
-  S.ping.envoyes.set(S.ping.n, performance.now());
-  if (S.ping.envoyes.size > 16) S.ping.envoyes.delete(S.ping.envoyes.keys().next().value);
-  t.envoyer(encoderPing(S.ping.n));
-  if (S.ping.dernierPong && performance.now() - S.ping.dernierPong > 5000) afficherDetailLiaison('sans réponse du rover');
+  latence.tic();
+  afficherDetailLiaison();
 }, 2000);
 
-function afficherDetailLiaison(forcer) {
+const barresLatence = (ms) => (ms === null ? 0 : ms < 60 ? 4 : ms < 120 ? 3 : ms < 250 ? 2 : 1);
+
+function afficherDetailLiaison() {
   const e = S.etat;
-  const morceaux = [];
-  if (S.ping.ms !== null) morceaux.push(`${Math.round(S.ping.ms)} ms`);
-  if (e?.rssi) morceaux.push(`${e.rssi} dBm`);
-  poserTexte($('#liaison-detail'), forcer ?? (morceaux.join(' · ') || 'Liaison établie'));
+  if (!S.transport?.connecte) return;
+  const ms = latence.ms;
+  poserTexte($('#lat-val'), latence.sansReponse ? 'sans réponse' : ms === null ? '— ms' : `${ms} ms`);
+  $('#lat-val').title = e?.rssi ? `${e.rssi} dBm` : '';
+  if (!e?.rssi) poserDonnee($('#liaison-signal'), 'barres', latence.sansReponse ? 0 : barresLatence(ms));
 }
 
 // ============================================================================
@@ -276,17 +276,7 @@ function surTrame(octets) {
     case 'carte': carte.appliquerCarte(m); break;
     case 'chemin': carte.definirChemin(m.points); break;
     case 'texte': surLigne(m.texte); break;
-    case 'pong': {
-      const t0 = S.ping.envoyes.get(m.n);
-      if (t0 !== undefined) {
-        S.ping.envoyes.delete(m.n);
-        const ms = performance.now() - t0;
-        S.ping.ms = S.ping.ms === null ? ms : S.ping.ms * 0.6 + ms * 0.4;
-        S.ping.dernierPong = performance.now();
-        afficherDetailLiaison();
-      }
-      break;
-    }
+    case 'pong': if (latence.surPong(m.n) !== null) afficherDetailLiaison(); break;
     default: break; // type inconnu : on l'ignore sans bruit
   }
 }
@@ -297,13 +287,15 @@ function surEtat(e) {
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
   if (S.vue === 'bord') bord.majEtat(e, S.modes);
-  poserDonnee($('#liaison-signal'), 'barres', barresSignal(e.rssi));
+  if (e.rssi) poserDonnee($('#liaison-signal'), 'barres', barresSignal(e.rssi));
   if (!precedent || Math.abs((precedent.tension) - e.tension) >= 0.1 || precedent.flags.batterie !== e.flags.batterie) majBatterieEntete(e);
   const nomMode = e.comportement === 0 && !carte.chemin.length ? 'Manuel' : (S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : e.comportement === 0 ? 'En route' : `Mode ${e.comportement}`);
   const jeton = $('#info-mode');
   poserTexte(jeton, e.flags.urgence ? "Arrêt d'urgence" : nomMode);
   jeton.hidden = nomMode === 'Manuel' && !e.flags.urgence; // « Manuel » n'apprend rien : on ne l'affiche pas
   jeton.classList.toggle('actif', e.comportement !== 0);
+  poserTexte($('#bar-vitesse'), `${(e.vitesse / 100).toFixed(2).replace('.', ',')} m/s`);
+  poserTexte($('#bar-cap'), `${Math.round(e.cap)}°`);
   majPosition(e, precedent);
   surfaceModeActif(e);
   majLigneEtat(e);
@@ -593,18 +585,11 @@ function appliquerAffichage() {
   app.dataset.dispo = PREF.commande ? 'commande' : 'carte';
   app.dataset.gaucher = PREF.gaucher ? '1' : '0';
 }
-const dessinerCommande = lierInterrupteur('sw-commande', 'commande', 'commande', appliquerAffichage);
+lierInterrupteur('sw-commande', 'commande', 'commande', appliquerAffichage);
 lierInterrupteur('sw-gaucher', 'gaucher', 'gaucher', appliquerAffichage);
 lierInterrupteur('sw-vibr', 'vibrations', 'vibr', () => vibrer(20));
 lierInterrupteur('sw-ecran', 'ecran', 'ecran', () => majVerrouEcran());
 appliquerAffichage();
-
-$('#btn-dispo').addEventListener('click', () => {
-  PREF.commande = !PREF.commande;
-  stocker('commande', PREF.commande ? '1' : '0');
-  dessinerCommande(); appliquerAffichage();
-  afficherToast('evt', PREF.commande ? 'Disposition télécommande' : 'Disposition carte');
-});
 
 // -- Manettes flottantes --
 const manetteXY = new Manette($('#zone-xy'), $('#manette-xy'), {
@@ -657,6 +642,7 @@ function regleVitesse(v, envoyer = true) {
   $('#vitesse').value = v;
   poserTexte($('#vitesse-val'), texteVitesse(v));
   poserTexte($('#vitesse-pilotage'), texteVitesse(v));
+  poserTexte($('#vitesse-pastille'), texteVitesse(v));
   $$('#seg-vitesse button').forEach((b) => b.classList.toggle('actif', Math.abs(Number(b.dataset.v) - v) < 0.005));
   if (envoyer) envoyerVitesse();
 }
@@ -664,16 +650,21 @@ $$('#seg-vitesse button').forEach((b) => b.addEventListener('click', () => { reg
 $('#vitesse').addEventListener('input', (ev) => regleVitesse(Number(ev.target.value)));
 regleVitesse(PREF.vitesse, false);
 
-// -- Tiroir des réglages rapides (vitesse, sécurités, inclinaison) : fermé par défaut --
+// -- Tiroir des réglages rapides (vitesse, sécurités, couches, écrans) : fermé par défaut --
 function tiroir(ouvert) {
   $('#tiroir').hidden = !ouvert;
-  $('#btn-tiroir').setAttribute('aria-expanded', String(ouvert));
-  if (ouvert) majSecurites();
+  $('#btn-poignee').setAttribute('aria-expanded', String(ouvert));
+  $('#btn-poignee .ico-slot').innerHTML = icone(ouvert ? 'chevronBas' : 'chevronHaut', 22);
+  if (ouvert) { majSecurites(); fermerMenusFlottants(); }
   placerEchelle();
 }
-$('#btn-tiroir').addEventListener('click', () => { tiroir($('#tiroir').hidden); vibrer(8); });
-// Poser un doigt sur une manette referme le tiroir : on veut conduire, pas régler.
+const basculerTiroir = () => { tiroir($('#tiroir').hidden); vibrer(8); };
+$('#btn-poignee').addEventListener('click', basculerTiroir);
+$('#btn-vitesse-pastille').addEventListener('click', basculerTiroir);
+$('.stat-vit').addEventListener('click', basculerTiroir);
+// Poser un doigt sur une manette, ou toucher la carte, referme le tiroir : on veut conduire, pas régler.
 for (const id of ['#zone-xy', '#zone-rot']) $(id).addEventListener('pointerdown', () => { if (!$('#tiroir').hidden) tiroir(false); }, true);
+$('#carte').addEventListener('pointerdown', () => { if (!$('#tiroir').hidden) tiroir(false); });
 
 // -- Inclinaison --
 const incl = new Inclinaison();
@@ -785,7 +776,8 @@ function majSecurites() {
   poserTexte($('#securites-detail'), etat === 'absent' ? 'non disponible sur ce rover' : S.securitesEnCours ? 'vérification…' : (ETIQUETTES_SECURITES[etat] ?? ''));
   const bandeau = $('#bandeau-securites');
   bandeau.hidden = !coupees;
-  $('#tiroir-alerte').hidden = !coupees;
+  $('#poignee-alerte').hidden = !coupees;
+  $('#pastille-alerte').hidden = !coupees;
   if (coupees) {
     poserTexte($('#bandeau-texte'), etat === 'partielles'
       ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
@@ -842,21 +834,87 @@ $$('#seg-radar button').forEach((b) => b.addEventListener('click', () => {
 // 12. Navigation entre les écrans
 // ============================================================================
 
+/** Les écrans ; « carte » est l'écran de pilotage sans les manettes (carte seule, toucher pour envoyer le rover). */
+const SECTION_DE = { carte: 'pilotage' };
 function allerA(nom) {
   S.vue = nom;
   $('#app').dataset.vue = nom;
-  $$('.vue').forEach((v) => v.classList.toggle('actif', v.id === `vue-${nom}`));
-  $$('.onglets button').forEach((b) => {
+  const section = SECTION_DE[nom] ?? nom;
+  $$('.vue').forEach((v) => v.classList.toggle('actif', v.id === `vue-${section}`));
+  $$('.onglets button, .menu-lateral > button[data-vue]').forEach((b) => {
     const actif = b.dataset.vue === nom;
     b.classList.toggle('actif', actif);
     if (actif) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  if (nom === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
+  tiroir(false);
+  fermerMenusFlottants();
+  if (section === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
   if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes); } else bord.arreter();
   if (nom === 'partage') montrerPartage();
   if (nom === 'reglages' && S.transport?.connecte && reglages.params.size === 0) envoyerTexte('params', { silencieux: true });
 }
-$$('.onglets button').forEach((b) => b.addEventListener('click', () => allerA(b.dataset.vue)));
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest('button[data-vue], button[data-vue-lien]');
+  if (!b) return;
+  const nom = b.dataset.vueLien ?? b.dataset.vue;
+  allerA(nom);
+});
+
+// -- Menu latéral (paysage) : replié ou ouvert, mémorisé --
+function reglerMenu(ouvert, memoriser = true) {
+  $('#app').dataset.menu = ouvert ? 'ouvert' : 'ferme';
+  if (memoriser) stocker('menu', ouvert ? '1' : '0');
+  requestAnimationFrame(() => { carte.redimensionner(); placerEchelle(); });
+}
+$('#btn-menu-replier').addEventListener('click', () => reglerMenu(false));
+$('#btn-menu-ouvrir').addEventListener('click', () => { if (paysage.matches) reglerMenu(true); });
+reglerMenu(lire('menu') !== '0', false);
+
+// -- Menu du rover (nom + chevron) : Se connecter / Démo / Se déconnecter --
+function majMenuRover() {
+  const connecte = !!S.transport && S.transport.etat !== 'deconnecte';
+  $('#mr-deconnecter').hidden = !connecte;
+}
+function fermerMenusFlottants() {
+  for (const [menu, bouton] of [['#menu-rover', '#btn-liaison'], ['#menu-couches', '#btn-couches']]) {
+    $(menu).hidden = true; $(bouton).setAttribute('aria-expanded', 'false');
+  }
+}
+function basculerMenu(menu, bouton) {
+  const ouvrir = $(menu).hidden;
+  fermerMenusFlottants();
+  $(menu).hidden = !ouvrir;
+  $(bouton).setAttribute('aria-expanded', String(ouvrir));
+}
+$('#btn-liaison').addEventListener('click', (ev) => { ev.stopPropagation(); majMenuRover(); basculerMenu('#menu-rover', '#btn-liaison'); });
+$('#btn-couches').addEventListener('click', (ev) => { ev.stopPropagation(); basculerMenu('#menu-couches', '#btn-couches'); });
+document.addEventListener('click', (ev) => { if (!ev.target.closest('.menu-flottant')) fermerMenusFlottants(); });
+$('#mr-connecter').addEventListener('click', () => { fermerMenusFlottants(); ouvrirConnexion(); });
+$('#mr-demo').addEventListener('click', () => { fermerMenusFlottants(); utiliserTransport(new TransportDemo()); });
+$('#mr-deconnecter').addEventListener('click', () => { fermerMenusFlottants(); S.transport?.deconnecter(); });
+
+// -- Couches de la carte : carte, trace, échos du sonar, chemin, base --
+const COUCHES = [['carte', 'Carte'], ['trace', 'Trace'], ['echos', 'Échos du sonar'], ['chemin', 'Chemin'], ['base', 'Base']];
+function poserCouche(nom, visible) {
+  carte.couches[nom] = visible;
+  carte.invalide = true;
+  stocker(`couche_${nom}`, visible ? '1' : '0');
+  for (const el of $$(`[data-couche="${nom}"]`)) {
+    if (el.tagName === 'INPUT') el.checked = visible; else el.setAttribute('aria-pressed', String(visible));
+  }
+}
+for (const [nom, libelle] of COUCHES) {
+  const ligne = document.createElement('label');
+  ligne.innerHTML = '<input type="checkbox" data-couche="' + nom + '"><span></span>';
+  $('span', ligne).textContent = libelle;
+  $('input', ligne).addEventListener('change', (ev) => poserCouche(nom, ev.target.checked));
+  $('#menu-couches').append(ligne);
+  const chip = document.createElement('button');
+  chip.type = 'button'; chip.className = 'chip-couche'; chip.dataset.couche = nom; chip.textContent = libelle;
+  chip.addEventListener('click', () => poserCouche(nom, !carte.couches[nom]));
+  $('#tiroir-couches').append(chip);
+  poserCouche(nom, lire(`couche_${nom}`) !== '0');
+}
 
 // ============================================================================
 // 13. Partage : QR code, copier, installer
@@ -909,7 +967,6 @@ function ouvrirConnexion() {
   $('#cx-ws-note').hidden = !(location.protocol === 'https:' && !/^(localhost|127\.)/.test(location.hostname));
   if (!dlg.open) ouvrirFeuille(dlg);
 }
-$('#btn-liaison').addEventListener('click', ouvrirConnexion);
 $('#btn-vide-connecter').addEventListener('click', ouvrirConnexion);
 $('#cx-fermer').addEventListener('click', fermerFeuilles);
 

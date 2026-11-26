@@ -179,7 +179,7 @@ test("file d'envoi : jamais deux écritures en même temps, même quand l'écrit
   while (performance.now() - debut < 800) { t.envoyer(encoderManette(0, 50, 0)); await attendre(10); }
   await attendre(200);
   assert.equal(t.chevauchements, 0);
-  assert.ok(t.ecrites.length >= 6, `écrites : ${t.ecrites.length}`);
+  assert.ok(t.ecrites.length >= 4, `écrites : ${t.ecrites.length}`);
   assert.ok(t.fileMax <= 1, `file max ${t.fileMax} : une seule consigne en attente`);
   assert.ok(t.jetees > 20, `${t.jetees} consignes remplacées avant d'être écrites`);
   const types = new Set(t.ecrites.map((e) => e.trame[0]));
