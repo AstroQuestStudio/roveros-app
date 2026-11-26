@@ -142,9 +142,23 @@ const reglages = new Reglages({
 $('#btn-recentrer').addEventListener('click', () => carte.recentrer());
 $('#btn-zoom-plus').addEventListener('click', () => carte.zoomer(1.4));
 $('#btn-zoom-moins').addEventListener('click', () => carte.zoomer(1 / 1.4));
+/** L'échelle de la carte se pose au-dessus des commandes qui flottent par-dessus. */
+function placerEchelle() {
+  const cr = $('#carte').getBoundingClientRect();
+  if (!cr.height) return;
+  let haut = cr.bottom;
+  const obstacles = paysage.matches ? [$('.deck-barre')] : [$('.deck-barre'), $('.deck-panneau'), $('#zone-xy'), $('#zone-rot')];
+  for (const el of obstacles) {
+    const r = el.getBoundingClientRect();
+    if (r.height && r.left < cr.left + 130 && r.right > cr.left + 8) haut = Math.min(haut, r.top);
+  }
+  carte.margeBas = Math.max(0, cr.bottom - haut);
+  carte.invalide = true;
+}
+window.addEventListener('resize', placerEchelle);
 // En paysage, les manettes et réglages recouvrent le bas de la carte : on remonte le rover.
 const paysage = window.matchMedia('(orientation: landscape)');
-const regleDecalage = () => { carte.decalage = paysage.matches ? 0.22 : 0; };
+const regleDecalage = () => { carte.decalage = paysage.matches ? 0.22 : 0.2; };
 regleDecalage(); paysage.addEventListener('change', regleDecalage);
 carte.addEventListener('vue', (ev) => $('#btn-recentrer').classList.toggle('actif', ev.detail.suivre));
 
@@ -288,6 +302,7 @@ function surEtat(e) {
   const nomMode = e.comportement === 0 && !carte.chemin.length ? 'Manuel' : (S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : e.comportement === 0 ? 'En route' : `Mode ${e.comportement}`);
   const jeton = $('#info-mode');
   poserTexte(jeton, e.flags.urgence ? "Arrêt d'urgence" : nomMode);
+  jeton.hidden = nomMode === 'Manuel' && !e.flags.urgence; // « Manuel » n'apprend rien : on ne l'affiche pas
   jeton.classList.toggle('actif', e.comportement !== 0);
   majPosition(e, precedent);
   surfaceModeActif(e);
@@ -355,18 +370,17 @@ function signalerRecalage(message) {
   if (message) noter('evt', message);
 }
 
-// Bouton « Je suis à la base » : recaler puis effacer la carte, après une confirmation d'un second toucher.
+// Bouton « Je suis à la base » : recaler puis effacer la carte, après un second toucher de confirmation.
 let minuterieBase = null;
 function reinitialiserBouton() {
   clearTimeout(minuterieBase);
   $('#btn-base').classList.remove('confirmer');
-  $('#btn-base-texte').textContent = 'Je suis à la base';
 }
 $('#btn-base').addEventListener('click', () => {
   const b = $('#btn-base');
   if (!b.classList.contains('confirmer')) {
     b.classList.add('confirmer');
-    $('#btn-base-texte').textContent = 'Confirmer : ici = base';
+    afficherToast('evt', 'Touchez encore pour confirmer : le rover est à la base');
     minuterieBase = setTimeout(reinitialiserBouton, 4000);
     return;
   }
@@ -650,6 +664,17 @@ $$('#seg-vitesse button').forEach((b) => b.addEventListener('click', () => { reg
 $('#vitesse').addEventListener('input', (ev) => regleVitesse(Number(ev.target.value)));
 regleVitesse(PREF.vitesse, false);
 
+// -- Tiroir des réglages rapides (vitesse, sécurités, inclinaison) : fermé par défaut --
+function tiroir(ouvert) {
+  $('#tiroir').hidden = !ouvert;
+  $('#btn-tiroir').setAttribute('aria-expanded', String(ouvert));
+  if (ouvert) majSecurites();
+  placerEchelle();
+}
+$('#btn-tiroir').addEventListener('click', () => { tiroir($('#tiroir').hidden); vibrer(8); });
+// Poser un doigt sur une manette referme le tiroir : on veut conduire, pas régler.
+for (const id of ['#zone-xy', '#zone-rot']) $(id).addEventListener('pointerdown', () => { if (!$('#tiroir').hidden) tiroir(false); }, true);
+
 // -- Inclinaison --
 const incl = new Inclinaison();
 const padIncl = $('#manette-incl');
@@ -760,6 +785,7 @@ function majSecurites() {
   poserTexte($('#securites-detail'), etat === 'absent' ? 'non disponible sur ce rover' : S.securitesEnCours ? 'vérification…' : (ETIQUETTES_SECURITES[etat] ?? ''));
   const bandeau = $('#bandeau-securites');
   bandeau.hidden = !coupees;
+  $('#tiroir-alerte').hidden = !coupees;
   if (coupees) {
     poserTexte($('#bandeau-texte'), etat === 'partielles'
       ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
@@ -825,7 +851,7 @@ function allerA(nom) {
     b.classList.toggle('actif', actif);
     if (actif) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  if (nom === 'pilotage') { carte.demarrer(); carte.redimensionner(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
+  if (nom === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
   if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes); } else bord.arreter();
   if (nom === 'partage') montrerPartage();
   if (nom === 'reglages' && S.transport?.connecte && reglages.params.size === 0) envoyerTexte('params', { silencieux: true });
@@ -912,6 +938,7 @@ $('#cx-ws').value = simUrl ?? lire('ws') ?? '';
 
 allerA('pilotage');
 carte.redimensionner();
+placerEchelle(); setTimeout(placerEchelle, 400);
 
 if (simUrl) {
   const url = normaliserUrlWs(simUrl);

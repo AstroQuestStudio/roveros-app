@@ -66,17 +66,9 @@
     <section id="vue-pilotage" class="vue actif" aria-label="Pilotage">
       <div class="carte-zone">
         <canvas id="carte" aria-label="Carte en direct. Touchez un point pour y envoyer le rover."></canvas>
-        <div class="carte-info" aria-live="off">
-          <span class="jeton" id="info-mode">Manuel</span>
-          <span class="jeton discret chiffres" id="info-pos">0,00 ; 0,00 m</span>
-          <span class="jeton alerte ambre" id="info-perdu" hidden>Position remise à zéro</span>
-          <span class="jeton alerte ambre" id="info-repere" hidden>Manette = repère de la carte</span>
-        </div>
-        <button type="button" class="jeton jeton-bouton jeton-base" id="btn-base" title="Redéfinit la base à l'endroit où se trouve le rover : il repart de zéro, carte vide">
-            <span class="ico-slot" data-icone="base"></span><span id="btn-base-texte">Je suis à la base</span>
-          </button>
         <div class="carte-outils">
           <button type="button" id="btn-recentrer" class="btn-icone rond actif" aria-label="Recentrer sur le rover"></button>
+          <button type="button" id="btn-base" class="btn-icone rond" aria-label="Je suis à la base : redéfinir la base ici" title="Je suis à la base : le rover repart de zéro, carte vide"><span class="ico-slot" data-icone="base"></span></button>
           <button type="button" id="btn-zoom-plus" class="btn-icone rond" aria-label="Zoom avant"></button>
           <button type="button" id="btn-zoom-moins" class="btn-icone rond" aria-label="Zoom arrière"></button>
           <button type="button" id="btn-dispo" class="btn-icone rond" aria-label="Changer la disposition : télécommande ou carte"></button>
@@ -98,25 +90,35 @@
           <span class="ligne-etat-point" aria-hidden="true"></span>
           <span class="ligne-etat-texte" id="ligne-etat-texte">Pas de rover connecté</span>
         </div>
+        <div class="carte-info" aria-live="off">
+          <span class="jeton" id="info-mode" hidden>Manuel</span>
+          <span class="jeton discret chiffres" id="info-pos" title="Là où le rover croit être">0,00 ; 0,00 m</span>
+          <span class="jeton alerte ambre" id="info-perdu" hidden>Position remise à zéro</span>
+          <span class="jeton alerte ambre" id="info-repere" hidden>Manette = repère de la carte</span>
+        </div>
       </div>
 
       <div class="deck">
-        <div class="deck-panneau">
+        <!-- Tiroir des réglages rapides : fermé par défaut, la carte reste libre -->
+        <div class="deck-panneau" id="tiroir" hidden>
+          <div class="seg large deck-seg" id="seg-vitesse" role="group" aria-label="Vitesse maximale du rover">
+            <button type="button" data-v="0.15"><span>Lent</span><small>0,15</small></button>
+            <button type="button" data-v="0.4" class="actif"><span>Normal</span><small>0,4</small></button>
+            <button type="button" data-v="0.7"><span>Rapide</span><small>0,7</small></button>
+            <button type="button" data-v="1"><span>Max</span><small>1 m/s</small></button>
+          </div>
           <div class="deck-commandes">
-            <button type="button" id="btn-stop" class="bouton-stop"><span class="ico-slot" data-icone="arret"></span><span>STOP</span></button>
+            <button type="button" class="interrupteur interrupteur-compact" role="switch" aria-checked="true" id="sw-securites" disabled>
+              <span class="interrupteur-textes"><span>Sécurités obstacles</span><small id="securites-detail">En attente du rover…</small></span><i></i>
+            </button>
             <button type="button" id="btn-incliner" class="bascule" aria-pressed="false"><span class="ico-slot" data-icone="incliner"></span><span>Incliner</span></button>
           </div>
-          <div class="deck-vitesse">
-            <span class="deck-vitesse-nom">Vitesse<output id="vitesse-pilotage" class="chiffres">0,40 m/s</output></span>
-            <div class="seg large" id="seg-vitesse" role="group" aria-label="Vitesse maximale du rover">
-              <button type="button" data-v="0.15">Lent</button>
-              <button type="button" data-v="0.4" class="actif">Normal</button>
-              <button type="button" data-v="0.7">Rapide</button>
-              <button type="button" data-v="1">Max</button>
-            </div>
-          </div>
-          <button type="button" class="interrupteur interrupteur-compact" role="switch" aria-checked="true" id="sw-securites" disabled>
-            <span class="interrupteur-textes"><span>Sécurités obstacles</span><small id="securites-detail">En attente du rover…</small></span><i></i>
+        </div>
+        <!-- Barre flottante : l'essentiel, toujours sous le pouce -->
+        <div class="deck-barre">
+          <button type="button" id="btn-stop" class="bouton-stop"><span class="ico-slot" data-icone="arret"></span><span>STOP</span></button>
+          <button type="button" id="btn-tiroir" class="bouton-tiroir" aria-expanded="false" aria-controls="tiroir" aria-label="Réglages rapides : vitesse, sécurités">
+            <span class="ico-slot" data-icone="reglages"></span><output id="vitesse-pilotage" class="chiffres">0,40 m/s</output><span class="point-alerte" id="tiroir-alerte" hidden></span>
           </button>
         </div>
 

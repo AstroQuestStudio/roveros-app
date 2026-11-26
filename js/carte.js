@@ -66,6 +66,7 @@ export class VueCarte extends EventTarget {
     this.marqueur = null;
     this.vue = { cx: 0, cy: 0, ppm: 120 };
     this.suivre = true;
+    this.margeBas = 0; // px : l'échelle remonte au-dessus des commandes qui flottent sur la carte
     this.decalage = 0; // fraction de la hauteur dont on remonte le rover (paysage : les commandes cachent le bas)
     this.largeur = 300; this.hauteur = 300; this.dpr = 1;
     this.actif = false;
@@ -464,7 +465,7 @@ export class VueCarte extends EventTarget {
     const { ctx, hauteur: H, vue } = this;
     const longM = longueurRonde(90 / vue.ppm);
     const longPx = longM * vue.ppm;
-    const x = 14; const y = H - 14;
+    const x = 14; const y = H - 14 - this.margeBas;
     ctx.strokeStyle = COULEURS.texte; ctx.fillStyle = COULEURS.texte; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + longPx, y); ctx.lineTo(x + longPx, y - 5); ctx.stroke();
     ctx.font = '500 12px Geist, system-ui, sans-serif'; ctx.textAlign = 'left';

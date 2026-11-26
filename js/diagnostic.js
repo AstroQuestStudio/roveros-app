@@ -77,7 +77,7 @@ export function phraseEtat(e, ctx = {}) {
   if (f.arrive) return { texte: 'Arrivé à destination', niveau: 'ok', cle: 'arrive' };
   if (ctx.mode) return { texte: `${ctx.mode} en cours`, niveau: 'info', cle: 'mode' };
   if (f.mouvement || e.vitesse > 2) return { texte: 'En mouvement', niveau: 'ok', cle: 'mouvement' };
-  return { texte: 'Prêt : poussez la manette de gauche', niveau: 'ok', cle: 'pret' };
+  return { texte: 'Prêt à rouler', niveau: 'ok', cle: 'pret' };
 }
 
 /** Texte court pour une notification, d'après la clé de la phrase. */

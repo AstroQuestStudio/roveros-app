@@ -41,7 +41,7 @@
   --police: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --police-mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --facilite: cubic-bezier(0.22, 1, 0.36, 1);
-  --urgence-h: 64px;
+  --urgence-h: 46px;
 }
 
 * { box-sizing: border-box; }
@@ -194,58 +194,72 @@ h2 { margin: 32px 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; 
 .seg.large button { flex: 1; padding: 0 4px; }
 
 /* ================= Pilotage ================= */
+/* La carte occupe TOUT l'écran ; tout le reste flotte par-dessus, en transparence : la ligne d'état et les
+   pastilles en haut, le panneau (stop, vitesse, sécurités) et les deux manettes en bas. */
 
-#vue-pilotage.actif { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; }
-.carte-zone { position: relative; min-height: 0; overflow: hidden; background: var(--s0); contain: layout paint; }
+#vue-pilotage.actif { display: block; }
+.carte-zone { position: absolute; inset: 0; overflow: hidden; background: var(--s0); contain: layout paint; }
 #carte { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-.carte-info { position: absolute; top: 8px; left: 8px; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; max-width: calc(100% - 64px); }
-.jeton { padding: 4px 8px; border-radius: 8px; font-size: 13px; line-height: 16px; font-weight: 500; background: rgba(7, 8, 13, 0.88); border: 1px solid var(--ligne-2); }
+
+.etat-bloc {
+  position: absolute; top: 8px; left: 8px; right: 64px; z-index: 5; max-width: 560px;
+  display: flex; flex-direction: column; gap: 6px; pointer-events: none;
+}
+.carte-info { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+.jeton { padding: 4px 8px; border-radius: 8px; font-size: 13px; line-height: 16px; font-weight: 500; background: rgba(7, 8, 13, 0.8); border: 1px solid var(--ligne-2); }
 .jeton.actif { color: var(--ambre); }
 .jeton.discret { font-weight: 400; color: var(--t2); }
 .jeton-bouton { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px; color: var(--t1); pointer-events: auto; cursor: pointer; }
 .jeton-bouton .ico { color: var(--accent); }
-.jeton-base { position: absolute; left: 100px; bottom: 8px; z-index: 2; }
 .jeton-bouton.confirmer { background: var(--ambre); border-color: var(--ambre); color: #1a1100; }
 .jeton-bouton.confirmer .ico { color: #1a1100; }
-.carte-outils { position: absolute; top: 8px; right: 8px; bottom: 8px; display: flex; flex-flow: column wrap; justify-content: flex-start; align-content: flex-end; gap: 8px; pointer-events: none; }
+.carte-outils { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; z-index: 5; }
 .carte-outils > * { pointer-events: auto; }
+.carte-outils .btn-icone.rond { background: rgba(17, 20, 28, 0.8); }
 .carte-vide {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
   display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
   padding: 16px 24px; border-radius: 16px; background: var(--s2); border: 1px solid var(--ligne-2);
 }
 .carte-vide p { margin: 0; color: var(--t2); }
 
-/* Le « deck » : tout ce qu'il faut sous le pouce. En portrait, il occupe le bas de l'écran ;
-   en paysage, il flotte par-dessus la carte. */
-:root { --zone-h: clamp(136px, 22dvh, 210px); }
-#app[data-dispo="carte"] { --zone-h: clamp(128px, 20dvh, 176px); }
-.deck {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 12px 12px;
-  background: var(--s0); border-top: 1px solid var(--ligne);
+/* Le « deck » : manettes et panneau, par-dessus la carte (les zones tactiles sont invisibles, le disque apparaît sous le pouce). */
+:root { --zone-h: clamp(150px, 27dvh, 250px); }
+#app[data-dispo="carte"] { --zone-h: clamp(120px, 19dvh, 170px); }
+.deck { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.deck-barre { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--zone-h) + 6px); z-index: 4; display: flex; gap: 8px; pointer-events: auto; }
+.bouton-tiroir {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; padding: 0 16px; border-radius: 14px;
+  background: rgba(17, 20, 28, 0.88); border: 1px solid var(--ligne-2); color: var(--t1); font-weight: 600; font-size: 16px;
 }
-.deck-panneau { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+.bouton-tiroir .ico { color: var(--accent); }
+.bouton-tiroir output { white-space: nowrap; }
+.bouton-tiroir[aria-expanded="true"] { border-color: var(--accent); }
+.point-alerte { position: absolute; top: 6px; right: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--negatif); box-shadow: 0 0 0 2px rgba(7, 8, 13, 0.9); }
+.deck-panneau {
+  position: absolute; left: 8px; right: 8px; bottom: calc(var(--zone-h) + 66px); z-index: 4; pointer-events: auto;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; max-width: 520px; margin: 0 auto;
+  border-radius: 16px; background: rgba(7, 8, 13, 0.8); border: 1px solid var(--ligne-2);
+}
 .deck-commandes { display: flex; align-items: center; gap: 8px; }
-.deck-commandes .seg button { padding: 0 12px; min-height: 36px; }
-.deck-vitesse { display: flex; align-items: center; gap: 12px; }
-.deck-vitesse-nom { font-size: 14px; line-height: 17px; font-weight: 500; color: var(--t2); flex: none; width: 76px; }
-.deck-vitesse-nom output { display: block; color: var(--t1); font-weight: 600; white-space: nowrap; }
-.deck-vitesse .seg { flex: 1; }
-.deck-vitesse .seg button { min-height: 36px; font-size: 15px; }
-.bascule {
+.deck-seg { flex: 1; min-width: 0; padding: 3px; gap: 3px; }
+.deck-seg button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 46px; padding: 0 2px; line-height: 16px; font-size: 14px; }
+.deck-seg button small { font-size: 12px; line-height: 14px; font-weight: 400; opacity: 0.8; }
+.deck-commandes .interrupteur-compact { flex: 1; min-width: 0; padding: 0 10px; gap: 8px; }
+.deck-commandes .bascule { flex: none; min-height: 44px; padding: 0 12px; }
+#btn-base.confirmer { background: var(--ambre); border-color: var(--ambre); color: #1a1100; }.bascule {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 12px;
   background: var(--s2); border: 1px solid var(--ligne); color: var(--t2); font-weight: 500; font-size: 14px; flex: 1;
   transition: background-color 150ms var(--facilite), color 150ms var(--facilite), transform 150ms var(--facilite);
 }
 .bascule:active { transform: scale(0.98); }
 .bascule[aria-pressed="true"] { background: var(--s3); border-color: var(--ambre); color: var(--ambre); }
-.deck-commandes .seg { flex: none; }
 
 /* Ligne d'état : pourquoi le rover n'avance pas, en clair, juste au-dessus des manettes. */
-.etat-bloc { display: flex; flex-direction: column; background: var(--s0); border-top: 1px solid var(--ligne); }
 .ligne-etat {
   display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 14px;
   font-size: 17px; line-height: 22px; font-weight: 600; color: var(--t1);
+  background: rgba(7, 8, 13, 0.84); border: 1px solid var(--ligne-2); border-radius: 12px;
   transition: background-color 200ms var(--facilite);
 }
 .ligne-etat-point { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--t3); }
@@ -253,28 +267,28 @@ h2 { margin: 32px 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; 
 .ligne-etat[data-niveau="neutre"] { color: var(--t2); font-weight: 500; }
 .ligne-etat[data-niveau="ok"] .ligne-etat-point { background: var(--positif); }
 .ligne-etat[data-niveau="info"] .ligne-etat-point { background: var(--accent); }
-.ligne-etat[data-niveau="alerte"] { background: rgba(245, 168, 58, 0.16); color: #ffd08a; }
+.ligne-etat[data-niveau="alerte"] { background: rgba(58, 38, 6, 0.93); border-color: rgba(245, 168, 58, 0.5); color: #ffd08a; }
 .ligne-etat[data-niveau="alerte"] .ligne-etat-point { background: var(--ambre); }
-.ligne-etat[data-niveau="danger"] { background: rgba(229, 72, 77, 0.22); color: #ffb4ae; }
+.ligne-etat[data-niveau="danger"] { background: rgba(72, 14, 16, 0.94); border-color: rgba(229, 72, 77, 0.6); color: #ffb4ae; }
 .ligne-etat[data-niveau="danger"] .ligne-etat-point { background: var(--negatif); }
 
 .bandeau-securites {
   display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 8px 6px 14px;
   background: var(--negatif); color: #fff; font-size: 14px; line-height: 18px; font-weight: 600;
+  border-radius: 12px; pointer-events: auto;
 }
 .bandeau-texte { flex: 1; min-width: 0; }
 .bandeau-bouton { flex: none; min-height: 36px; padding: 0 14px; border-radius: 8px; background: #fff; border: 0; color: #8c1d20; font-weight: 700; font-size: 14px; }
 
 /* Gros bouton Stop (freinage normal ; l'arrêt d'urgence verrouillé reste le grand bouton rouge du bas). */
 .bouton-stop {
-  display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: 1.5; min-height: 52px; padding: 0 16px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: none; min-height: 52px; padding: 0 14px;
   border-radius: 14px; background: #2a1013; border: 2px solid var(--urgence); color: #ffd4d0;
-  font-size: 22px; font-weight: 700; letter-spacing: 0.06em;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.05em;
   transition: background-color 120ms var(--facilite), transform 120ms var(--facilite);
 }
 .bouton-stop .ico { width: 26px; height: 26px; }
 .bouton-stop:active { background: var(--urgence); color: #fff; transform: scale(0.98); }
-.deck-commandes .bascule { min-height: 52px; }
 .interrupteur-compact { min-height: 42px; padding: 0 14px; }
 .interrupteur-textes { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .interrupteur-textes > span { font-weight: 500; }
@@ -291,36 +305,38 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; backgro
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10px; border-radius: 50%; background: var(--t1); border: 0; }
 input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--t1); border: 0; }
 
-/* Zones tactiles : le pouce se pose n'importe où, la manette apparaît dessous. */
+/* Zones tactiles : transparentes, le pouce se pose n'importe où, la manette apparaît dessous. */
 .zone {
-  position: relative; width: 100%; height: var(--zone-h); border-radius: 16px; overflow: hidden; touch-action: none;
-  background: var(--s1); border: 1px solid var(--ligne);
+  position: absolute; bottom: 0; width: 50%; height: var(--zone-h); overflow: hidden; touch-action: none; pointer-events: auto;
+  background: none; border: 0;
   --cx: 50%; --cy: 50%;
 }
-.zone-xy, .zone-rot { grid-row: 2; }
-.zone-xy { grid-column: 1; } .zone-rot { grid-column: 2; }
-#app[data-gaucher="1"] .zone-xy { grid-column: 2; }
-#app[data-gaucher="1"] .zone-rot { grid-column: 1; }
-.zone.active { border-color: var(--accent); }
-.zone-aide { position: absolute; left: 8px; right: 8px; bottom: 8px; text-align: center; font-size: 14px; line-height: 18px; color: var(--t2); pointer-events: none; transition: opacity 150ms var(--facilite); }
+.zone-xy { left: 0; } .zone-rot { right: 0; }
+#app[data-gaucher="1"] .zone-xy { left: auto; right: 0; }
+#app[data-gaucher="1"] .zone-rot { right: auto; left: 0; }
+.zone-aide {
+  position: absolute; left: 8px; right: 8px; bottom: 4px; text-align: center; font-size: 13px; line-height: 16px;
+  color: rgba(238, 240, 245, 0.62); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9); pointer-events: none; transition: opacity 150ms var(--facilite);
+}
 .zone.active .zone-aide { opacity: 0; }
 
-/* Manettes : un disque, un pouce, rien d'autre */
+/* Manettes : un disque translucide, un pouce, rien d'autre */
 .manette {
-  --m: clamp(104px, min(44vw, calc(var(--zone-h) - 16px)), 190px);
+  --m: clamp(104px, min(46vw, calc(var(--zone-h) - 14px)), 200px);
   position: absolute; left: var(--cx); top: var(--cy); transform: translate(-50%, -50%);
   width: var(--m); height: var(--m); border-radius: 50%; pointer-events: none;
-  background: var(--s2); border: 1px solid var(--ligne-2);
+  background: rgba(17, 20, 28, 0.36); border: 1.5px solid rgba(238, 240, 245, 0.3);
+  transition: background-color 150ms var(--facilite), border-color 150ms var(--facilite);
 }
-.zone.active .manette { border-color: var(--accent); }
+.zone.active .manette { border-color: var(--accent); background: rgba(79, 227, 208, 0.1); }
 .manette-decor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.manette-decor .anneau { fill: none; stroke: var(--ligne-2); stroke-width: 0.8; stroke-dasharray: 2 3; }
-.manette-decor .fleche { fill: var(--t3); opacity: 0.6; }
-.manette-decor .rail { stroke: var(--ligne-2); stroke-width: 1.2; stroke-linecap: round; stroke-dasharray: 1 4; fill: none; }
-.manette-decor .rotation { fill: none; stroke: var(--t3); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.7; }
+.manette-decor .anneau { fill: none; stroke: rgba(238, 240, 245, 0.32); stroke-width: 0.8; stroke-dasharray: 2 3; }
+.manette-decor .fleche { fill: rgba(238, 240, 245, 0.65); opacity: 0.7; }
+.manette-decor .rail { stroke: rgba(238, 240, 245, 0.4); stroke-width: 1.2; stroke-linecap: round; stroke-dasharray: 1 4; fill: none; }
+.manette-decor .rotation { fill: none; stroke: rgba(238, 240, 245, 0.7); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75; }
 .manette-pouce {
   position: absolute; left: 50%; top: 50%; width: 36%; height: 36%; margin: -18% 0 0 -18%; border-radius: 50%; pointer-events: none;
-  background: #232a37; border: 1px solid rgba(238, 240, 245, 0.24); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  background: rgba(35, 42, 55, 0.85); border: 1px solid rgba(238, 240, 245, 0.4); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
   transition: transform 120ms var(--facilite);
 }
 .zone.active .manette-pouce { border-color: var(--accent); }
@@ -329,32 +345,20 @@ input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border-radius
 .incl-point { position: absolute; left: 50%; top: 50%; width: 16%; height: 16%; margin: -8% 0 0 -8%; border-radius: 50%; background: var(--ambre); pointer-events: none; transition: transform 60ms linear; }
 
 @media (orientation: landscape) {
-  #vue-pilotage.actif { display: block; }
-  .carte-zone { position: absolute; inset: 0; }
-  .deck { position: absolute; inset: 0; display: block; padding: 0; background: none; border: 0; pointer-events: none; }
-  .zone { position: absolute; bottom: 0; width: 34%; height: 64%; border: 0; border-radius: 0; background: none; pointer-events: auto; --cy: 62%; }
-  .zone-xy { left: 0; } .zone-rot { right: 0; }
-  #app[data-gaucher="1"] .zone-xy { left: auto; right: 0; }
-  #app[data-gaucher="1"] .zone-rot { right: auto; left: 0; }
-  .manette { --m: clamp(120px, 46vh, 190px); }
-  .etat-bloc { position: absolute; top: 8px; left: 176px; right: 64px; z-index: 5; border: 0; background: none; pointer-events: none; }
-  .etat-bloc .ligne-etat { background-color: rgba(7, 8, 13, 0.92); border: 1px solid var(--ligne-2); border-radius: 12px; }
-  .etat-bloc .ligne-etat[data-niveau="alerte"] { background-color: rgba(60, 40, 8, 0.95); }
-  .etat-bloc .ligne-etat[data-niveau="danger"] { background-color: rgba(70, 14, 16, 0.95); }
-  .etat-bloc .bandeau-securites { border-radius: 12px; margin-bottom: 4px; pointer-events: auto; }
-  .jeton-base { left: 8px; bottom: auto; top: 84px; }
-  .carte-info { flex-direction: column; align-items: flex-start; flex-wrap: nowrap; max-width: 168px; }
+  .zone { width: 31%; height: 60%; --cy: 55%; }
+  .manette { --m: clamp(110px, 38vh, 150px); }
   .zone-aide { display: none; }
-  .deck-panneau {
-    position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); pointer-events: auto;
-    width: min(272px, 38%); padding: 8px; border-radius: 16px; background: rgba(7, 8, 13, 0.92); border: 1px solid var(--ligne-2);
-  }
-  .bascule { padding: 0 8px; gap: 8px; }
-  .deck-commandes { flex-wrap: wrap; }
-  .deck-commandes .seg { width: 100%; display: flex; }
-  .deck-commandes .seg button { flex: 1; }
-  .deck-vitesse-nom { width: 48px; }
-  .deck-vitesse .seg button { padding: 0 4px; }
+  .etat-bloc { max-width: 300px; }
+  .deck-barre { bottom: 8px; }
+  .deck-panneau { left: 50%; right: auto; bottom: 68px; transform: translateX(-50%); width: min(322px, 50%); padding: 6px; gap: 4px; }
+  .bouton-stop { padding: 0 12px; gap: 6px; font-size: 18px; min-height: 48px; }
+  .bouton-tiroir { min-height: 48px; padding: 0 12px; font-size: 15px; }
+  .deck-seg button { min-height: 42px; font-size: 13px; }
+  .deck-seg button small { font-size: 11px; }
+  .interrupteur-textes { flex-wrap: nowrap; }
+  .interrupteur-textes > span { font-size: 13px; white-space: nowrap; }
+  .interrupteur-textes small { display: none; }
+  .deck-commandes .bascule { padding: 0 8px; }
   #btn-dispo { display: none; }
 }
 
@@ -394,25 +398,26 @@ input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border-radius
   background: repeating-linear-gradient(-45deg, #f6c445 0 8px, #14100a 8px 16px);
 }
 .urgence:active { background: #cf2f26; }
-.urgence-contenu { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 12px; height: 100%; padding: 8px 16px 4px; }
-.urgence-ico svg { width: 36px; height: 36px; stroke-width: 1.5; }
+.urgence-contenu { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 10px; height: 100%; padding: 6px 16px 2px; }
+.urgence-ico svg { width: 26px; height: 26px; stroke-width: 1.6; }
 .urgence-textes { display: flex; flex-direction: column; text-align: left; line-height: 20px; }
-.urgence-titre { font-size: 20px; line-height: 24px; font-weight: 600; }
-.urgence-sous { font-size: 13px; line-height: 16px; font-weight: 400; opacity: 0.9; }
+.urgence-titre { font-size: 16px; line-height: 20px; font-weight: 700; letter-spacing: 0.02em; }
+.urgence-sous { display: none; }
 .urgence-progres { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.4); transform: scaleX(0); transform-origin: left; }
 .urgence.maintien .urgence-progres { animation: remplir 1.1s linear forwards; }
 
 .urgence[data-etat="verrouille"] { background: #3a0f12; box-shadow: inset 0 0 0 2px var(--urgence); }
 .urgence[data-etat="verrouille"] .urgence-titre { color: #ffb4ae; }
+.urgence[data-etat="verrouille"] .urgence-sous { display: block; font-size: 12px; line-height: 14px; }
 
 @media (orientation: landscape) {
-  .urgence { width: 104px; min-height: 0; }
+  .urgence { width: 68px; min-height: 0; }
   .urgence::before { left: 0; right: auto; top: 0; bottom: 0; width: 4px; height: auto; background: repeating-linear-gradient(-45deg, #f6c445 0 8px, #14100a 8px 16px); }
-  .urgence-contenu { flex-direction: column; gap: 8px; padding: 8px 8px 8px 12px; text-align: center; }
+  .urgence-contenu { flex-direction: column; gap: 6px; padding: 8px 6px 8px 10px; text-align: center; }
   .urgence-textes { text-align: center; }
-  .urgence-titre { font-size: 16px; line-height: 20px; }
-  .urgence-sous { font-size: 12px; }
-  .urgence-ico svg { width: 40px; height: 40px; }
+  .urgence-titre { font-size: 12px; line-height: 15px; }
+  .urgence-sous { display: none; }
+  .urgence-ico svg { width: 30px; height: 30px; }
 }
 
 @keyframes remplir { to { transform: scaleX(1); } }
