@@ -338,8 +338,16 @@ export class VueCarte extends EventTarget {
     ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-5, 1); ctx.lineTo(0, -4); ctx.lineTo(5, 1); ctx.lineTo(5, 5); ctx.lineTo(-5, 5); ctx.closePath(); ctx.stroke();
     ctx.font = '500 11px Geist, system-ui, sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('base', 0, 22);
+    const d = this.rover.ok ? Math.hypot(this.rover.x, this.rover.y) : 0;
+    ctx.fillText(d > 0.3 ? `base · ${formaterDistance(d)}` : 'base', 0, 22);
     ctx.restore();
+    if (d > 0.3) { // pointillé du rover vers la base : « il croit que la base est par là »
+      const [rx, ry] = this.versEcran(this.rover.x, this.rover.y);
+      ctx.save();
+      ctx.strokeStyle = COULEURS.base; ctx.globalAlpha = 0.45; ctx.lineWidth = 1.2; ctx.setLineDash([2, 6]);
+      ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(px, py); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   _dessinerTrace() {

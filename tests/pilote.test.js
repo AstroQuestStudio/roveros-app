@@ -222,3 +222,25 @@ test('file d\'envoi : une consigne MANETTE périmée est jetée au lieu d\'être
   assert.ok(!t.ecrites.some((e) => e.trame[0] === T.MANETTE), 'la vieille consigne n\'est pas partie');
   assert.ok(t.ecrites.some((e) => e.trame[0] === T.TEXTE), 'les autres trames passent');
 });
+
+// ---------- Repère : le rover par défaut, jamais le monde ----------
+
+test('repère : par défaut la trame MANETTE a le bit « monde » à 0 (joystick, rotation, clavier, inclinaison)', () => {
+  const b = banc();
+  assert.equal(b.pilote.monde, false);
+  for (const [nom, valeur] of [
+    ['joystick', { x: 0.3, y: 0.9 }], ['rotation', { x: 0.8 }], ['clavier', { x: 0, y: 1, w: 0 }], ['inclinaison', { x: 0.2, y: 0.7 }],
+  ]) {
+    const n = b.sorties.length;
+    b.pousser(nom, valeur);
+    b.avancer(600);
+    const trames = manettes(b.sorties.slice(n));
+    assert.ok(trames.length > 0, `${nom} : des trames sont parties`);
+    assert.ok(trames.every((x) => x.trame[4] === 0), `${nom} : bit monde = 0`);
+    b.pilote.toutArreter(); b.pilote.signaler(); b.avancer(400);
+  }
+  b.pilote.monde = true; // option explicite
+  b.pousser('joystick', { x: 0, y: 1 });
+  b.avancer(300);
+  assert.equal(manettes(b.sorties).pop().trame[4], 1);
+});

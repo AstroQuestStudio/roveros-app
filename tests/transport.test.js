@@ -153,7 +153,7 @@ test('faux rover : param, recaler, trame inconnue', () => {
   rover.recevoir(encoderTexte('param v_max 0.8'));
   assert.equal(rover.params.v_max.v, 0.8);
   rover.recevoir(encoderTexte('param v_max 99')); // au-dessus du maximum : écrêté
-  assert.equal(rover.params.v_max.v, 1.0);
+  assert.equal(rover.params.v_max.v, 1.2);
   rover.recevoir(encoderTexte('param inconnu 1'));
   assert.ok(recu.texte.some((l) => l.startsWith('err paramètre inconnu')));
   rover.recevoir(Uint8Array.of(0x7f, 1, 2, 3)); // type inconnu : ignoré

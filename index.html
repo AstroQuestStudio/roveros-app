@@ -44,9 +44,9 @@
       </span>
       <span id="liaison-signal" class="signal" data-barres="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
     </button>
-    <div id="entete-batt" class="entete-batt" hidden title="Tension de la batterie">
+    <div id="entete-batt" class="entete-batt" hidden title="Batterie du rover">
       <span class="ico-batt" id="entete-batt-ico"></span>
-      <span id="entete-batt-v" class="chiffres">—</span>
+      <span class="entete-batt-textes"><span id="entete-batt-pct" class="chiffres">—</span><span id="entete-batt-v" class="chiffres">—</span></span>
     </div>
     <button id="btn-journal" class="btn-icone" type="button" aria-label="Ouvrir le journal"><span class="pastille" id="journal-pastille" hidden></span></button>
   </header>
@@ -69,8 +69,12 @@
         <div class="carte-info" aria-live="off">
           <span class="jeton" id="info-mode">Manuel</span>
           <span class="jeton discret chiffres" id="info-pos">0,00 ; 0,00 m</span>
-          <span class="jeton alerte" id="info-alerte" hidden></span>
+          <span class="jeton alerte ambre" id="info-perdu" hidden>Position remise à zéro</span>
+          <span class="jeton alerte ambre" id="info-repere" hidden>Manette = repère de la carte</span>
         </div>
+        <button type="button" class="jeton jeton-bouton jeton-base" id="btn-base" title="Redéfinit la base à l'endroit où se trouve le rover : il repart de zéro, carte vide">
+            <span class="ico-slot" data-icone="base"></span><span id="btn-base-texte">Je suis à la base</span>
+          </button>
         <div class="carte-outils">
           <button type="button" id="btn-recentrer" class="btn-icone rond actif" aria-label="Recentrer sur le rover"></button>
           <button type="button" id="btn-zoom-plus" class="btn-icone rond" aria-label="Zoom avant"></button>
@@ -83,25 +87,37 @@
         </div>
       </div>
 
+      <!-- Bandeau d'avertissement (sécurités coupées) et ligne d'état : juste au-dessus des manettes -->
+      <div class="etat-bloc">
+        <div class="bandeau-securites" id="bandeau-securites" role="alert" hidden>
+          <span class="ico-slot" data-icone="alerte"></span>
+          <span class="bandeau-texte" id="bandeau-texte">Sécurités obstacles COUPÉES : le rover ne s'arrêtera pas devant un mur</span>
+          <button type="button" class="bandeau-bouton" id="btn-securites-remettre">Remettre</button>
+        </div>
+        <div class="ligne-etat" id="ligne-etat" data-niveau="neutre" role="status" aria-live="polite">
+          <span class="ligne-etat-point" aria-hidden="true"></span>
+          <span class="ligne-etat-texte" id="ligne-etat-texte">Pas de rover connecté</span>
+        </div>
+      </div>
+
       <div class="deck">
         <div class="deck-panneau">
           <div class="deck-commandes">
-            <div class="seg" role="group" aria-label="Repère de pilotage" id="seg-repere">
-              <button type="button" data-monde="0" class="actif" title="La direction suit le cap du rover">Rover</button>
-              <button type="button" data-monde="1" title="La direction ne dépend pas du cap">Monde</button>
-            </div>
+            <button type="button" id="btn-stop" class="bouton-stop"><span class="ico-slot" data-icone="arret"></span><span>STOP</span></button>
             <button type="button" id="btn-incliner" class="bascule" aria-pressed="false"><span class="ico-slot" data-icone="incliner"></span><span>Incliner</span></button>
-            <button type="button" id="btn-stop" class="bascule"><span class="ico-slot" data-icone="arret"></span><span>Stop</span></button>
           </div>
           <div class="deck-vitesse">
-            <span class="deck-vitesse-nom">Vitesse</span>
-            <div class="seg large" id="seg-vitesse" role="group" aria-label="Vitesse maximale en pour cent">
-              <button type="button" data-v="25">25</button>
-              <button type="button" data-v="50" class="actif">50</button>
-              <button type="button" data-v="75">75</button>
-              <button type="button" data-v="100">100</button>
+            <span class="deck-vitesse-nom">Vitesse<output id="vitesse-pilotage" class="chiffres">0,40 m/s</output></span>
+            <div class="seg large" id="seg-vitesse" role="group" aria-label="Vitesse maximale du rover">
+              <button type="button" data-v="0.15">Lent</button>
+              <button type="button" data-v="0.4" class="actif">Normal</button>
+              <button type="button" data-v="0.7">Rapide</button>
+              <button type="button" data-v="1">Max</button>
             </div>
           </div>
+          <button type="button" class="interrupteur interrupteur-compact" role="switch" aria-checked="true" id="sw-securites" disabled>
+            <span class="interrupteur-textes"><span>Sécurités obstacles</span><small id="securites-detail">En attente du rover…</small></span><i></i>
+          </button>
         </div>
 
         <!-- Les zones captent le pouce n'importe où : la manette apparaît là où l'on pose le doigt. -->
@@ -202,11 +218,19 @@
           <button type="button" data-radar="arret">Arrêt</button>
         </div>
 
+        <h2>Repère de la manette</h2>
+        <p class="aide"><strong>Le rover</strong> (par défaut, conseillé) : haut de la manette = le rover avance du côté de son capteur à ultrasons, quelle que soit son orientation. <strong>La carte</strong> : haut de la manette = haut de la carte, même si le rover regarde ailleurs. Ce réglage revient toujours sur « Le rover » à chaque ouverture et à chaque connexion.</p>
+        <div class="seg large" role="group" aria-label="Repère de la manette" id="seg-repere">
+          <button type="button" data-monde="0" class="actif">Le rover</button>
+          <button type="button" data-monde="1">La carte</button>
+        </div>
+
         <h2>Vitesse maximale</h2>
         <label class="reglage-ligne premier">
-          <span>Part de la vitesse du rover <output id="vitesse-val" class="chiffres">50 %</output></span>
-          <input id="vitesse" type="range" min="10" max="100" step="5" value="50" aria-label="Vitesse maximale en pour cent">
+          <span>Vitesse du rover <output id="vitesse-val" class="chiffres">0,40 m/s</output></span>
+          <input id="vitesse" type="range" min="0.15" max="1" step="0.05" value="0.4" aria-label="Vitesse maximale en mètres par seconde">
         </label>
+        <p class="aide">Règle la vitesse maximale et la rotation du rover (comme pour une voiture radiocommandée). Plus fin : cherchez <em>v_max</em>, <em>v_rapide</em>, <em>w_max</em> et <em>v_aveugle_man</em> (vitesse maximale vers un côté que la tête ne regarde pas, sécurités actives) dans les paramètres plus bas.</p>
 
         <h2>Confort</h2>
         <div class="interrupteurs">

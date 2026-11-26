@@ -2,7 +2,7 @@
 // et l'interface. Lisez-le de haut en bas : chaque section porte un titre.
 
 import {
-  decoder, analyserLigne, encoderTexte, encoderPing, encoderAller, encoderUrgence, encoderStop, NOMS_DRAPEAUX, DRAPEAUX_FR,
+  decoder, analyserLigne, encoderTexte, encoderPing, encoderAller, encoderUrgence, encoderStop,
 } from './protocole.js';
 import { TransportBle, bluetoothDisponible } from './transport-ble.js';
 import { TransportWs, normaliserUrlWs } from './transport-ws.js';
@@ -15,6 +15,8 @@ import { TableauDeBord, niveauBatterie, barresSignal } from './bord.js';
 import { creerQr, dessinerQr } from './qr.js';
 import { icone, MODES_FR, libelleMode } from './icones.js';
 import { poserTexte, poserDonnee } from './utile.js';
+import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
+import { commandesVitesse, limiterVitesse } from './vitesse.js';
 
 const $ = (sel, racine = document) => racine.querySelector(sel);
 const $$ = (sel, racine = document) => [...racine.querySelectorAll(sel)];
@@ -61,7 +63,16 @@ injecterIcones();
  * Note un message dans le journal. genre : 'evt' (événement du rover), 'err' (erreur), 'app' (l'application).
  * Les événements et erreurs du rover s'affichent aussi en notification discrète.
  */
+const limiteurMessages = new Limiteur(5000); // jamais deux notifications identiques en moins de 5 s
 function noter(genre, texte, { toast = genre !== 'app' } = {}) {
+  const derniere = S.journal[S.journal.length - 1];
+  if (derniere && derniere.genre === genre && derniere.texte === texte) {
+    // Même message qui se répète : une seule ligne « ×N » dans le journal, pas de nouvelle notification.
+    derniere.n = (derniere.n ?? 1) + 1; derniere.t = new Date();
+    if ($('#dlg-journal').open) rendreJournal();
+    return;
+  }
+  if (toast && !limiteurMessages.autoriser(`${genre}:${texte}`)) toast = false;
   S.journal.push({ t: new Date(), genre, texte });
   if (S.journal.length > 300) S.journal.shift();
   if (toast) afficherToast(genre, texte);
@@ -73,6 +84,7 @@ function noter(genre, texte, { toast = genre !== 'app' } = {}) {
 
 function afficherToast(genre, texte) {
   const zone = $('#toasts');
+  if ([...zone.children].some((t) => t.textContent === texte)) return; // déjà affichée : pas de doublon à l'écran
   while (zone.childElementCount >= 3) zone.firstElementChild.remove();
   const el = document.createElement('div');
   el.className = `toast ${genre}`;
@@ -90,7 +102,7 @@ function rendreJournal() {
     const li = document.createElement('li');
     li.className = e.genre;
     const h = document.createElement('span'); h.className = 'heure'; h.textContent = e.t.toLocaleTimeString('fr-FR');
-    const t = document.createElement('span'); t.textContent = e.texte;
+    const t = document.createElement('span'); t.textContent = e.n > 1 ? `${e.texte}  ×${e.n}` : e.texte;
     li.append(h, t);
     liste.append(li);
   }
@@ -132,7 +144,7 @@ $('#btn-zoom-plus').addEventListener('click', () => carte.zoomer(1.4));
 $('#btn-zoom-moins').addEventListener('click', () => carte.zoomer(1 / 1.4));
 // En paysage, les manettes et réglages recouvrent le bas de la carte : on remonte le rover.
 const paysage = window.matchMedia('(orientation: landscape)');
-const regleDecalage = () => { carte.decalage = paysage.matches ? 0.16 : 0; };
+const regleDecalage = () => { carte.decalage = paysage.matches ? 0.22 : 0; };
 regleDecalage(); paysage.addEventListener('change', regleDecalage);
 carte.addEventListener('vue', (ev) => $('#btn-recentrer').classList.toggle('actif', ev.detail.suivre));
 
@@ -195,18 +207,26 @@ function surEtatLiaison(t, { etat, message }) {
   $('#carte-vide').hidden = etat === 'connecte' || carte.rover.ok;
   if (etat !== 'connecte') {
     pilote.toutArreter();
+    diagnostic.reinitialiser();
     $('#liaison-signal').dataset.barres = '0';
     S.ping.ms = null;
   }
   if (etat === 'erreur') noter('err', message || 'Liaison perdue');
   else if (etat !== 'connexion') noter('app', `Liaison : ${LIBELLES_ETAT[etat].toLowerCase()}${message && etat !== 'deconnecte' ? ` (${message})` : ''}`, { toast: false });
   majVerrouEcran();
+  majLigneEtat(null);
+  majSecurites();
   if (etat === 'connecte') {
+    reinitialiserRepere(); // le repère de la carte n'est JAMAIS gardé d'une connexion à l'autre
+    S.tConnexion = performance.now();
+    setTimeout(majSecurites, 3600);
+    S.verifSecurites = true; // les sécurités obstacles sont remises en service si on les trouve coupées
+    setTimeout(() => { S.verifSecurites = false; }, 20000); // la liste des paramètres met quelques secondes à arriver
     noter('app', `Connecté : ${nomLiaison(t)}`, { toast: false });
     afficherToast('evt', `Connecté : ${nomLiaison(t)}`);
     // Au départ on demande tout : identité + comportements, puis les paramètres.
     setTimeout(() => { if (S.transport === t && t.connecte) { t.envoyer(encoderTexte('infos')); t.envoyer(encoderTexte('params')); } }, 250);
-    setTimeout(() => { if (S.transport === t && t.connecte) t.envoyer(encoderTexte(`vitesse ${PREF.vitesse}`)); }, 500);
+    setTimeout(() => { if (S.transport === t && t.connecte) envoyerVitesse(true); }, 500);
     if (S.urgence.actif) envoyerUrgence(true); // l'urgence verrouillée survit à une reconnexion
   }
 }
@@ -269,37 +289,103 @@ function surEtat(e) {
   const jeton = $('#info-mode');
   poserTexte(jeton, e.flags.urgence ? "Arrêt d'urgence" : nomMode);
   jeton.classList.toggle('actif', e.comportement !== 0);
-  poserTexte($('#info-pos'), `${(e.x / 1000).toFixed(2).replace('.', ',')} ; ${(e.y / 1000).toFixed(2).replace('.', ',')} m`);
+  majPosition(e, precedent);
   surfaceModeActif(e);
-  majAlerte(e, precedent);
+  majLigneEtat(e);
   if (e.flags.arrive && !(precedent?.flags.arrive)) carte.retirerMarqueur();
   confirmerUrgence(e);
   afficherDetailLiaison();
 }
 
-/** Le problème le plus grave du moment, bien visible sur la carte (on regarde le rover, pas l'écran). */
-const GRAVITE = { danger: 0, alerte: 1 };
-function majAlerte(e, precedent) {
-  let pire = null;
-  for (const nom of NOMS_DRAPEAUX) {
-    const d = DRAPEAUX_FR[nom];
-    if (!e.flags[nom] || nom === 'urgence' || !(d.gravite in GRAVITE)) continue;
-    if (!pire || GRAVITE[d.gravite] < GRAVITE[DRAPEAUX_FR[pire].gravite]) pire = nom;
-  }
-  const jeton = $('#info-alerte');
-  jeton.hidden = !pire;
-  if (pire) {
-    poserTexte(jeton, DRAPEAUX_FR[pire].texte);
-    jeton.classList.toggle('ambre', DRAPEAUX_FR[pire].gravite === 'alerte');
-    if (!precedent || !precedent.flags[pire]) vibrer(DRAPEAUX_FR[pire].gravite === 'danger' ? [60, 40, 60] : 30);
+// -- Ligne d'état : « pourquoi il n'avance pas », en clair --
+const diagnostic = new Diagnostic();
+
+function contexteEtat() {
+  const e = S.etat;
+  const nomMode = e && e.comportement !== 0 && S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : '';
+  return {
+    liaison: S.transport?.etat ?? 'deconnecte',
+    commande: pilote.sortie,
+    urgenceApp: S.urgence.actif,
+    mode: nomMode,
+  };
+}
+
+function afficherLigne(ligne) {
+  const el = $('#ligne-etat');
+  poserDonnee(el, 'niveau', ligne.niveau);
+  poserTexte($('#ligne-etat-texte'), ligne.texte);
+}
+
+/** À chaque trame ÉTAT (et quand la liaison change, avec e = null). */
+function majLigneEtat(e) {
+  const r = diagnostic.traiter(e, contexteEtat());
+  afficherLigne(r.ligne);
+  if (r.annonce) {
+    afficherToast(r.annonce.niveau === 'danger' ? 'err' : 'evt', r.annonce.texte);
+    vibrer(r.annonce.niveau === 'danger' ? [60, 40, 60] : 30); // une seule fois : l'anti-doublon est dans le diagnostic
   }
 }
+
+// -- Position estimée par le rover, base, recalage --
+const APRES_RECALAGE_MS = 30000;
+let minuterieRecalage = null;
+
+function majPosition(e, precedent) {
+  const x = e.x / 1000; const y = e.y / 1000;
+  const fmt = (v) => v.toFixed(2).replace('.', ',');
+  const distBase = Math.hypot(x, y);
+  poserTexte($('#info-pos'), `${fmt(x)} ; ${fmt(y)} m · cap ${Math.round(e.cap)}°`);
+  $('#info-pos').title = `Là où le rover croit être : ${fmt(x)} ; ${fmt(y)} m, cap ${Math.round(e.cap)}° (base à ${fmt(distBase)} m)`;
+  // Position et carte brusquement remises à zéro sans que nous l'ayons demandé : le rover a été reposé.
+  if (precedent && !S.recalageVoulu) {
+    const saut = Math.hypot(precedent.x / 1000, precedent.y / 1000);
+    if (saut > 0.3 && distBase < 0.03 && Math.abs(e.cap) < 3) signalerRecalage('Le rover a remis sa position à zéro');
+  }
+}
+
+/** Le rover a remis sa position et sa carte à zéro (pris en main, ou recalé) : tout ce qu'on affichait est caduc. */
+function signalerRecalage(message) {
+  carte.effacerCarte(); carte.reinitialiserTrajet();
+  const chip = $('#info-perdu');
+  chip.hidden = false;
+  poserTexte(chip, `Position remise à zéro à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`);
+  clearTimeout(minuterieRecalage);
+  minuterieRecalage = setTimeout(() => { chip.hidden = true; }, APRES_RECALAGE_MS);
+  if (message) noter('evt', message);
+}
+
+// Bouton « Je suis à la base » : recaler puis effacer la carte, après une confirmation d'un second toucher.
+let minuterieBase = null;
+function reinitialiserBouton() {
+  clearTimeout(minuterieBase);
+  $('#btn-base').classList.remove('confirmer');
+  $('#btn-base-texte').textContent = 'Je suis à la base';
+}
+$('#btn-base').addEventListener('click', () => {
+  const b = $('#btn-base');
+  if (!b.classList.contains('confirmer')) {
+    b.classList.add('confirmer');
+    $('#btn-base-texte').textContent = 'Confirmer : ici = base';
+    minuterieBase = setTimeout(reinitialiserBouton, 4000);
+    return;
+  }
+  reinitialiserBouton();
+  if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
+  S.recalageVoulu = true; setTimeout(() => { S.recalageVoulu = false; }, 3000);
+  envoyerTexte('recaler');
+  envoyerTexte('carte raz');
+  $('#info-perdu').hidden = true;
+  afficherToast('evt', 'Base redéfinie ici : le rover repart de zéro');
+  vibrer(20);
+});
 
 function majBatterieEntete(e) {
   const pct = niveauBatterie(e.tension);
   const bloc = $('#entete-batt');
   bloc.hidden = false;
   poserDonnee(bloc, 'niveau', e.flags.batterie || pct < 15 ? 'bas' : pct < 35 ? 'moyen' : 'bon');
+  poserTexte($('#entete-batt-pct'), `${pct} %`);
   poserTexte($('#entete-batt-v'), `${e.tension.toFixed(1).replace('.', ',')} V`);
 }
 
@@ -312,8 +398,11 @@ function surLigne(texte) {
       if (typeof l.valeurs.cellule === 'number') carte.definirCellule(l.valeurs.cellule);
       break;
     case 'modes': S.modes = l.modes; rendreModes(); break;
-    case 'param': reglages.majParam(l); break;
-    case 'evt': noter('evt', l.message); break;
+    case 'param': reglages.majParam(l); surParamRecu(l); break;
+    case 'evt':
+      noter('evt', l.message);
+      if (/repos[ée]|remises? à zéro/i.test(l.message)) signalerRecalage();
+      break;
     case 'err': noter('err', l.message); break;
     case 'calib': noter('evt', `Calibration : ${Object.entries(l.valeurs).map(([k, v]) => `${k} = ${v}`).join(', ')}`); break;
     default: break;
@@ -462,7 +551,7 @@ const PREF = {
   gaucher: lire('gaucher') === '1', // manettes inversées
   vibrations: lire('vibr') !== '0',
   ecran: lire('ecran') !== '0', // garder l'écran allumé tant qu'on est connecté
-  vitesse: Number(lire('vitesse')) || 50,
+  vitesse: Number(lire('vitesse_ms')) || 0.4, // m/s (l'ancien réglage en % est abandonné)
 };
 
 /** Retour tactile : une courte vibration (si le téléphone et les préférences le permettent). */
@@ -515,11 +604,19 @@ const manetteRot = new Manette($('#zone-rot'), $('#manette-rot'), {
 });
 new Clavier((x, y, w) => pilote.maj('clavier', { x, y, w }));
 
+/** Repère de la manette : le ROVER par défaut (haut = là où regarde son capteur). Jamais mémorisé. */
+function choisirRepere(monde) {
+  pilote.monde = monde;
+  $$('#seg-repere button').forEach((o) => o.classList.toggle('actif', (o.dataset.monde === '1') === monde));
+  $('#info-repere').hidden = !monde;
+}
+function reinitialiserRepere() { choisirRepere(false); }
 $$('#seg-repere button').forEach((b) => b.addEventListener('click', () => {
-  $$('#seg-repere button').forEach((o) => o.classList.toggle('actif', o === b));
-  pilote.monde = b.dataset.monde === '1';
+  choisirRepere(b.dataset.monde === '1');
+  if (pilote.monde) afficherToast('evt', 'Repère de la carte : haut de la manette = haut de la carte');
   vibrer(10);
 }));
+reinitialiserRepere();
 
 /** Stop : freinage normal (pas l'arrêt d'urgence). Coupe aussi tout comportement autonome. */
 $('#btn-stop').addEventListener('click', () => {
@@ -528,16 +625,26 @@ $('#btn-stop').addEventListener('click', () => {
   vibrer(15);
 });
 
-// -- Vitesse maximale : boutons rapides sur l'écran de pilotage, curseur fin dans les réglages --
+// -- Vitesse : « lent / normal / rapide / max », comme une voiture radiocommandée --
+// Le choix règle la vitesse maximale du rover en m/s (v_max) ET la vitesse qu'il s'autorise quand la voie
+// est libre (v_rapide : sinon il dépasserait le choix), et la rotation (w_max) en proportion.
+const texteVitesse = (v) => `${v.toFixed(2).replace('.', ',')} m/s`;
+
+/** Envoie les paramètres de vitesse au rover : v_max, v_rapide, w_max (et 100 % : c'est v_max qui décide). */
 let envoiVitesse = null;
-function regleVitesse(v, envoyer = true) {
-  PREF.vitesse = v; stocker('vitesse', String(v));
-  $('#vitesse').value = v;
-  poserTexte($('#vitesse-val'), `${v} %`);
-  $$('#seg-vitesse button').forEach((b) => b.classList.toggle('actif', Number(b.dataset.v) === v));
-  if (!envoyer) return;
+function envoyerVitesse(maintenant = false) {
   clearTimeout(envoiVitesse);
-  envoiVitesse = setTimeout(() => envoyerTexte(`vitesse ${v}`, { silencieux: true }), 200);
+  const envoyer = () => { for (const c of commandesVitesse(PREF.vitesse)) envoyerTexte(c, { silencieux: true }); };
+  if (maintenant) envoyer(); else envoiVitesse = setTimeout(envoyer, 250);
+}
+function regleVitesse(v, envoyer = true) {
+  v = limiterVitesse(v);
+  PREF.vitesse = v; stocker('vitesse_ms', String(v));
+  $('#vitesse').value = v;
+  poserTexte($('#vitesse-val'), texteVitesse(v));
+  poserTexte($('#vitesse-pilotage'), texteVitesse(v));
+  $$('#seg-vitesse button').forEach((b) => b.classList.toggle('actif', Math.abs(Number(b.dataset.v) - v) < 0.005));
+  if (envoyer) envoyerVitesse();
 }
 $$('#seg-vitesse button').forEach((b) => b.addEventListener('click', () => { regleVitesse(Number(b.dataset.v)); vibrer(10); }));
 $('#vitesse').addEventListener('input', (ev) => regleVitesse(Number(ev.target.value)));
@@ -635,6 +742,63 @@ document.addEventListener('visibilitychange', () => {
   majVerrouEcran();
   if (document.hidden) { pilote.toutArreter(); manetteXY.relacher(); manetteRot.relacher(); if (S.transport?.connecte && !S.urgence.actif) S.transport.envoyer(encoderStop()); }
 });
+
+// -- Sécurités obstacles : interrupteur (param reflexe + param carte_on), état lu sur le rover --
+const ETIQUETTES_SECURITES = {
+  actives: 'actives', coupees: 'COUPÉES', partielles: 'à moitié coupées', inconnu: 'en attente du rover…',
+};
+let minuterieSecurites = null;
+
+function majSecurites() {
+  const connecte = !!S.transport?.connecte;
+  let etat = connecte ? etatSecurites(reglages.params) : 'inconnu';
+  if (connecte && etat === 'inconnu' && reglages.params.size > 0 && performance.now() - (S.tConnexion ?? 0) > 3500) etat = 'absent';
+  const sw = $('#sw-securites');
+  const coupees = etat === 'coupees' || etat === 'partielles';
+  sw.setAttribute('aria-checked', String(!coupees));
+  sw.disabled = !connecte || etat === 'inconnu' || etat === 'absent' || S.securitesEnCours;
+  poserTexte($('#securites-detail'), etat === 'absent' ? 'non disponible sur ce rover' : S.securitesEnCours ? 'vérification…' : (ETIQUETTES_SECURITES[etat] ?? ''));
+  const bandeau = $('#bandeau-securites');
+  bandeau.hidden = !coupees;
+  if (coupees) {
+    poserTexte($('#bandeau-texte'), etat === 'partielles'
+      ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
+      : "MODE RADIOCOMMANDE : sécurités coupées, aucun freinage devant un mur");
+  }
+}
+
+/** Un paramètre arrive du rover : on s'en sert pour afficher l'état réel, et pour la remise en service à la connexion. */
+function surParamRecu(p) {
+  if (p.nom !== 'reflexe' && p.nom !== 'carte_on') return;
+  if (S.verifSecurites && p.valeur < 0.5) {
+    envoyerTexte(`param ${p.nom} 1`, { silencieux: true });
+    clearTimeout(S.relireParams); S.relireParams = setTimeout(() => envoyerTexte('params', { silencieux: true }), 1500);
+    afficherToast('evt', 'Sécurités obstacles remises en service');
+  }
+  majSecurites();
+}
+
+function basculerSecurites(actives) {
+  if (!S.transport?.connecte || S.securitesEnCours) return;
+  const v = actives ? 1 : 0;
+  S.verifSecurites = false; // un choix volontaire n'est jamais « corrigé »
+  S.securitesEnCours = true;
+  majSecurites();
+  for (const nom of ['reflexe', 'carte_on']) envoyerTexte(`param ${nom} ${v}`, { silencieux: true });
+  setTimeout(() => envoyerTexte('params', { silencieux: true }), 250); // on relit l'état réel, on ne le suppose pas
+  clearTimeout(minuterieSecurites);
+  minuterieSecurites = setTimeout(() => {
+    S.securitesEnCours = false;
+    const etat = etatSecurites(reglages.params);
+    const bon = actives ? etat === 'actives' : etat === 'coupees';
+    if (!bon) afficherToast('err', "Le rover n'a pas confirmé le changement des sécurités");
+    majSecurites();
+  }, 1800);
+  vibrer(actives ? 15 : [40, 40, 40]);
+}
+$('#sw-securites').addEventListener('click', () => basculerSecurites($('#sw-securites').getAttribute('aria-checked') !== 'true'));
+$('#btn-securites-remettre').addEventListener('click', () => basculerSecurites(true));
+majSecurites();
 
 // ============================================================================
 // 11. Réglages : commandes rapides, radar

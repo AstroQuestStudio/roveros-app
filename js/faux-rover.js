@@ -105,12 +105,17 @@ const DISQUE = [];
 for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (dx * dx + dy * dy <= 9.5) DISQUE.push([dx, dy]);
 
 const DEFAUTS = {
-  v_max: [0.5, 0.1, 1.0],
+  v_max: [0.5, 0.05, 1.2], // m/s : vitesse maximale à la manette
+  v_rapide: [0.5, 0.05, 1.2], // m/s : vitesse que le rover s'autorise quand le sonar voit la voie libre
+  w_max: [2.4, 0.5, 5.0], // rad/s : rotation maximale
+  v_aveugle_man: [0.35, 0.05, 1.0], // m/s : vitesse maximale dans une direction que la tête ne regarde pas
   accel: [1.5, 0.3, 4.0],
   dist_arret: [0.06, 0.02, 0.4],
   dist_suivi: [0.5, 0.25, 1.5],
   gain_cap: [2.5, 0.5, 6.0],
   vitesse_tete: [90, 30, 240],
+  reflexe: [1, 0, 1], // 1 = le rover ralentit et s'arrête devant ce que voit le sonar
+  carte_on: [1, 0, 1], // 1 = la carte sert à ralentir près d'un obstacle
 };
 
 export class FauxRover {
@@ -222,7 +227,7 @@ export class FauxRover {
 
   /** Lignes envoyées à la connexion : identité du rover et liste des comportements. */
   envoyerInfos() {
-    this.texte(`info version=demo-1.0 nom=Rover-DEMO cellule=${CELLULE} v_max=${this.params.v_max.v} w_max=${W_MAX}`);
+    this.texte(`info version=demo-1.0 nom=Rover-DEMO cellule=${CELLULE} v_max=${this.params.v_max.v} w_max=${this.params.w_max.v}`);
     this.texte(`modes ${MODES.join(',')}`);
   }
 
@@ -531,7 +536,7 @@ export class FauxRover {
       const c = Math.cos(this.cap); const s = Math.sin(this.cap);
       [vx, vy] = [vx * c - vy * s, vx * s + vy * c];
     }
-    return { vx, vy, w: (m.w / 100) * W_MAX * (this.vitessePct / 100) };
+    return { vx, vy, w: (m.w / 100) * this.params.w_max.v * (this.vitessePct / 100) };
   }
 
   comportementChien(dt, vmax) {
@@ -651,13 +656,15 @@ export class FauxRover {
       this.aveugle = dansCarte(cc, ll) && this.carte[ll * TAILLE_CARTE + cc] === CASE_INCONNUE && this.mode !== 'manuel';
       this.libreCm = this.aveugle ? 255 : Math.round(limiter(marge * 100, 0, 254));
       let k = 1;
-      if (marge < arret) { k = 0; this.obstacle = true; } else if (marge < arret + 0.15) k = (marge - arret) / 0.15;
-      if (this.aveugle) k = Math.min(k, 0.5);
+      if (this.params.reflexe.v >= 0.5) {
+        if (marge < arret) { k = 0; this.obstacle = true; } else if (marge < arret + 0.15) k = (marge - arret) / 0.15;
+      }
+      if (this.aveugle && this.params.carte_on.v >= 0.5) k = Math.min(k, 0.5);
       vx *= k; vy *= k;
     } else this.aveugle = false;
     this.tObstacle = this.obstacle && this.mode !== 'manuel' ? this.tObstacle + PAS : 0;
     if (this.urgence) { vx = 0; vy = 0; w = 0; }
-    return { vx: limiter(vx, -1, 1), vy: limiter(vy, -1, 1), w: limiter(w, -W_MAX, W_MAX) };
+    return { vx: limiter(vx, -1, 1), vy: limiter(vy, -1, 1), w: limiter(w, -this.params.w_max.v, this.params.w_max.v) };
   }
 
   integrer(cmd, dt) {
