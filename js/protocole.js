@@ -32,6 +32,8 @@ export const T = {
   PONG: 0x91,
   // mise à jour du firmware (0xA0) : elle se fait depuis le PC, l'application ignore ces trames
   MAJ: 0xA0,
+  // carte sans limite : origine de la fenêtre glissante de la carte (voir docs/CARTE_SANS_LIMITE.md du dépôt roveros)
+  ORIGINE: 0x86,
 };
 
 /** La carte fait 64 × 64 cases. */
@@ -155,6 +157,7 @@ export function decoder(donnees) {
       case T.CHEMIN: return decoderChemin(o, vue);
       case T.TEXTE_ROVER: return { type: 'texte', texte: decodeurTexte.decode(o.subarray(1)).replace(/[\r\n]+$/, '') };
       case T.PONG: return o.length >= 2 ? { type: 'pong', n: o[1] } : null;
+      case T.ORIGINE: return decoderOrigine(o, vue);
       case T.MAJ: return { type: 'maj' }; // ignorée proprement (jamais une erreur, jamais de texte)
       default: return { type: 'inconnu', code: o[0], longueur: o.length };
     }
@@ -184,7 +187,26 @@ function decoderEtat(o, vue) {
     libre: o[16], // cm, 255 = non regardée
     vitesse: o[17], // cm/s
     rssi: vue.getInt8(18), // dBm, 0 = inconnue
+    // vingtième octet (rovers à carte sans limite) : version de l'origine, pour ne pas mélanger deux repères
+    versionOrigine: o.length >= 20 ? o[19] : undefined,
   };
+}
+
+/** ORIGINE (0x86) : ox i32, oy i32 (cases du monde), version u8, cellule u16 (mm). */
+function decoderOrigine(o, vue) {
+  if (o.length < 12) return null;
+  return { type: 'origine', ox: vue.getInt32(1, true), oy: vue.getInt32(5, true), version: o[9], cellule: vue.getUint16(10, true) };
+}
+
+/** Construit une trame ORIGINE (utilisée par la démo et les tests). */
+export function encoderOrigine({ ox, oy, version, cellule }) {
+  const t = new Uint8Array(12);
+  const vue = new DataView(t.buffer);
+  t[0] = T.ORIGINE;
+  vue.setInt32(1, ox, true); vue.setInt32(5, oy, true);
+  t[9] = version & 0xff;
+  vue.setUint16(10, cellule, true);
+  return t;
 }
 
 function decoderPoints(o, vue) {
@@ -300,7 +322,7 @@ export function analyserLigne(ligne) {
 
 /** Construit une trame ÉTAT de 19 octets à partir d'un objet de valeurs « physiques ». */
 export function encoderEtat(e) {
-  const t = new Uint8Array(19);
+  const t = new Uint8Array(e.versionOrigine === undefined ? 19 : 20);
   const vue = new DataView(t.buffer);
   t[0] = T.ETAT;
   vue.setInt16(1, limiter(entier(e.x ?? 0), -32768, 32767), true);
@@ -317,6 +339,7 @@ export function encoderEtat(e) {
   t[16] = limiter(entier(e.libre ?? 255), 0, 255);
   t[17] = limiter(entier(e.vitesse ?? 0), 0, 255);
   vue.setInt8(18, limiter(entier(e.rssi ?? 0), -128, 127));
+  if (e.versionOrigine !== undefined) t[19] = e.versionOrigine & 0xff;
   return t;
 }
 
