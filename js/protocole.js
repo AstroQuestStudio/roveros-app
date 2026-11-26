@@ -53,7 +53,7 @@ export const NOMS_DRAPEAUX = [
 export const DRAPEAUX_FR = {
   urgence: { texte: "Arrêt d'urgence actif", gravite: 'danger' },
   garde: { texte: 'Plus aucun ordre reçu : arrêt de sécurité', gravite: 'alerte' },
-  obstacle: { texte: 'Arrêté devant un obstacle', gravite: 'alerte' },
+  obstacle: { texte: 'Arrêté ou bridé par un obstacle', gravite: 'alerte' },
   laisse: { texte: 'Limite de zone atteinte', gravite: 'alerte' },
   blocage: { texte: 'Roue bloquée', gravite: 'danger' },
   patine: { texte: 'Patinage détecté', gravite: 'alerte' },
@@ -62,12 +62,12 @@ export const DRAPEAUX_FR = {
   imu_ko: { texte: 'Centrale inertielle en panne', gravite: 'danger' },
   arrive: { texte: 'Destination atteinte', gravite: 'ok' },
   gyro_ok: { texte: 'Gyroscope prêt', gravite: 'ok' },
-  aveugle: { texte: 'Avance vers une zone non regardée', gravite: 'alerte' },
+  aveugle: { texte: 'Ralenti : la tête ne peut pas regarder de ce côté', gravite: 'alerte' },
   sature: { texte: 'Commandes saturées', gravite: 'info' },
   retard: { texte: 'Boucle de commande en retard', gravite: 'alerte' },
   mouvement: { texte: 'En mouvement', gravite: 'info' },
   cible: { texte: 'Cible suivie', gravite: 'info' },
-  souleve: { texte: 'Rover soulevé', gravite: 'danger' },
+  souleve: { texte: 'Pris en main, ou roues sans prise : cap non tenu', gravite: 'danger' },
   choc: { texte: 'Contact avec un obstacle', gravite: 'danger' },
 };
 
