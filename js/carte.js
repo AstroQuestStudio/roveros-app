@@ -8,6 +8,7 @@
 // toucher envoie le rover à cet endroit (l'application reçoit l'événement via `surToucher`).
 
 import { TAILLE_CARTE, CASE_LIBRE, CASE_OCCUPEE, appliquerCarte } from './protocole.js';
+import { LARGEUR_ROVER, LONGUEUR_ROVER, positionSonar } from './gabarit.js';
 
 // Palette de la carte (mêmes tons que l'interface : encre, eau, sable, turquoise du sonar, ambre du rover).
 const COULEURS = {
@@ -29,8 +30,6 @@ const COULEURS = {
 const PPM_MIN = 30; // pixels par mètre
 const PPM_MAX = 700;
 const DUREE_ECHO_MS = 4500; // un écho s'estompe en 4,5 s
-const LARGEUR_ROVER = 0.17; // m (pour le dessin)
-const LONGUEUR_ROVER = 0.22;
 const PORTEE_SONAR = 2.55;
 
 /** Longueur « ronde » de barre d'échelle : 0,1 / 0,2 / 0,5 / 1 / 2 / 5 m. */
@@ -398,7 +397,8 @@ export class VueCarte extends EventTarget {
     if (!rover.ok) return;
     const a = rover.cap + rover.tete; // angle absolu, horaire à partir de +y
     const portee = rover.sonar > 0 && rover.sonar < 255 ? rover.sonar / 100 : PORTEE_SONAR;
-    const [sx, sy] = this.versEcran(rover.x, rover.y);
+    const capteur = positionSonar(rover.x, rover.y, rover.cap); // le faisceau part du capteur, pas du centre
+    const [sx, sy] = this.versEcran(capteur.x, capteur.y);
     const L = portee * this.vue.ppm;
     // Sur l'écran, l'angle horaire depuis le haut = angle canvas (depuis +x, horaire) − 90°.
     const ac = a - Math.PI / 2;

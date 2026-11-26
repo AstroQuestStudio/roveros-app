@@ -18,11 +18,12 @@ import {
   assemblerDrapeaux, decoderOrdre, encoderCarte, encoderChemin, encoderEtat, encoderPoints,
   encoderPong, encoderTexteRover, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
 } from './protocole.js';
+import { RAYON_CIRCONSCRIT, LARGEUR_ROVER, positionSonar } from './gabarit.js';
 
 export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'arret'];
 
 const CELLULE = 0.06; // taille d'une case de la carte, en mètres (la carte couvre ±1,92 m)
-const RAYON = 0.12; // rayon du châssis
+const RAYON = RAYON_CIRCONSCRIT; // cercle qui entoure le châssis réel (25 × 20 cm : voir gabarit.js)
 const SONAR_MAX = 2.55;
 const W_MAX = 2.4; // rad/s
 const PAS = 0.05; // un pas de simulation = 50 ms (20 Hz)
@@ -642,7 +643,7 @@ export class FauxRover {
       const wx = (vx * c + vy * s) / vit; const wy = (-vx * s + vy * c) / vit;
       // trois rayons : centre et deux côtés du châssis
       let d = Infinity;
-      for (const off of [-RAYON * 0.9, 0, RAYON * 0.9]) d = Math.min(d, lancer(this.monde, this.x - wy * off, this.y + wx * off, wx, wy));
+      for (const off of [-LARGEUR_ROVER / 2, 0, LARGEUR_ROVER / 2]) d = Math.min(d, lancer(this.monde, this.x - wy * off, this.y + wx * off, wx, wy));
       const marge = d - RAYON;
       const arret = this.params.dist_arret.v;
       // « zone non regardée » : la case devant n'est pas encore connue
@@ -709,23 +710,24 @@ export class FauxRover {
     if (this.radar === 'arret') return;
     const a = this.cap + radians(this.tete);
     const dx = Math.sin(a); const dy = Math.cos(a);
-    let d = lancer(this.monde, this.x, this.y, dx, dy);
+    const capteur = positionSonar(this.x, this.y, this.cap); // le capteur est à 9,5 cm devant le centre
+    let d = lancer(this.monde, capteur.x, capteur.y, dx, dy);
     const echo = d <= SONAR_MAX;
     if (echo) d += (this.alea() - 0.5) * 0.01;
     const portee = echo ? d : SONAR_MAX;
-    this.marquerRayon(dx, dy, portee, echo);
+    this.marquerRayon(capteur.x, capteur.y, dx, dy, portee, echo);
     this.dernierEcho = echo ? Math.max(1, Math.round(d * 100)) : 255;
     this.echos.push({
       gisement: this.tete, distance: echo ? Math.round(d * 1000) : 0,
-      x: (this.x + dx * portee) * 1000, y: (this.y + dy * portee) * 1000, t: Math.round(this.t * 1000) & 0xffff,
+      x: (capteur.x + dx * portee) * 1000, y: (capteur.y + dy * portee) * 1000, t: Math.round(this.t * 1000) & 0xffff,
     });
   }
 
   /** Met la carte à jour : cases traversées = libres, case touchée = occupée. */
-  marquerRayon(dx, dy, portee, echo) {
+  marquerRayon(ox, oy, dx, dy, portee, echo) {
     const px = -dy; const py = dx; // perpendiculaire (pour élargir un peu le faisceau)
     const poser = (s, decal, valeur) => {
-      const c = caseDe(this.x + dx * s + px * decal); const l = caseDe(this.y + dy * s + py * decal);
+      const c = caseDe(ox + dx * s + px * decal); const l = caseDe(oy + dy * s + py * decal);
       if (!dansCarte(c, l)) return;
       const i = l * TAILLE_CARTE + c;
       if (valeur === CASE_OCCUPEE) this.carte[i] = CASE_OCCUPEE;
