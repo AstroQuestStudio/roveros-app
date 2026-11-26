@@ -11,7 +11,7 @@ import { VueCarte, formaterDistance } from './carte.js';
 import { Manette, Clavier, Pilote } from './manettes.js';
 import { Inclinaison } from './inclinaison.js';
 import { Reglages } from './reglages.js';
-import { TableauDeBord, niveauBatterie, barresSignal } from './bord.js';
+import { TableauDeBord, SuiviTension, barresSignal } from './bord.js';
 import { creerQr, dessinerQr } from './qr.js';
 import { icone, MODES_FR, libelleMode } from './icones.js';
 import { poserTexte, poserDonnee } from './utile.js';
@@ -43,6 +43,7 @@ const S = {
   vue: 'pilotage',
   nonLus: 0,
 };
+const suiviTension = new SuiviTension();
 
 // ============================================================================
 // 2. Icônes (injectées dans les éléments portant data-icone)
@@ -243,6 +244,8 @@ function surEtatLiaison(t, { etat, message }) {
   majLigneEtat(null);
   majSecurites();
   if (etat === 'connecte') {
+    suiviTension.reinitialiser();
+    $('#entete-batt').hidden = true;
     reinitialiserRepere(); // le repère de la carte n'est JAMAIS gardé d'une connexion à l'autre
     S.tConnexion = performance.now();
     setTimeout(majSecurites, 3600);
@@ -305,9 +308,10 @@ function surEtat(e) {
   S.tEtat = performance.now();
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
-  if (S.vue === 'bord') bord.majEtat(e, S.modes, carte.positionAbsolue(e) ?? undefined);
+  const etatTension = suiviTension.actualiser(e, S.tEtat);
+  if (S.vue === 'bord') bord.majEtat(e, S.modes, carte.positionAbsolue(e) ?? undefined, suiviTension.minimum);
   if (e.rssi) poserDonnee($('#liaison-signal'), 'barres', barresSignal(e.rssi));
-  if (!precedent || Math.abs((precedent.tension) - e.tension) >= 0.1 || precedent.flags.batterie !== e.flags.batterie) majBatterieEntete(e);
+  majBatterieEntete(e, etatTension);
   const nomMode = e.comportement === 0 && !carte.chemin.length ? 'Manuel' : (S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : e.comportement === 0 ? 'En route' : `Mode ${e.comportement}`);
   const jeton = $('#info-mode');
   poserTexte(jeton, e.flags.urgence ? "Arrêt d'urgence" : nomMode);
@@ -430,13 +434,14 @@ $('#btn-base').addEventListener('click', () => {
   vibrer(20);
 });
 
-function majBatterieEntete(e) {
-  const pct = niveauBatterie(e.tension);
+function majBatterieEntete(e, etat) {
   const bloc = $('#entete-batt');
   bloc.hidden = false;
-  poserDonnee(bloc, 'niveau', e.flags.batterie || pct < 15 ? 'bas' : pct < 35 ? 'moyen' : 'bon');
-  poserTexte($('#entete-batt-pct'), `${pct} %`);
+  poserDonnee(bloc, 'niveau', etat === 'faible' ? 'bas' : etat === 'chute' ? 'moyen' : 'bon');
+  poserTexte($('#entete-batt-etat'), etat);
   poserTexte($('#entete-batt-v'), `${e.tension.toFixed(1).replace('.', ',')} V`);
+  bloc.title = `Tension : ${e.tension.toFixed(1).replace('.', ',')} V — ${etat} ; ouvrir le tableau de bord`;
+  bloc.setAttribute('aria-label', bloc.title);
 }
 
 function surLigne(texte) {
@@ -984,7 +989,7 @@ function allerA(nom) {
   fermerMenusFlottants();
   if (patrouille.actif && nom !== 'carte') { patrouille.actif = false; $('#patrouille').hidden = true; majPatrouille(); }
   if (section === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
-  if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes, carte.positionAbsolue(S.etat) ?? undefined); } else bord.arreter();
+  if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes, carte.positionAbsolue(S.etat) ?? undefined, suiviTension.minimum); } else bord.arreter();
   if (nom === 'partage') montrerPartage();
   if (nom === 'reglages' && S.transport?.connecte && reglages.params.size === 0) envoyerTexte('params', { silencieux: true });
 }

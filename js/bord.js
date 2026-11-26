@@ -6,14 +6,24 @@ import { icone, libelleMode } from './icones.js';
 import { echapper } from './reglages.js';
 import { poserTexte, poserDonnee } from './utile.js';
 
-// Estimation du niveau de batterie à partir de la tension.
-// Le rover mesure la tension APRÈS son régulateur (6,0 V tant que les accus tiennent) : elle ne baisse
-// qu'en fin de charge. 6,0 V = plein, 5,3 V = seuil d'alerte du rover. À adapter à votre rover.
-export const V_VIDE = 5.3;
-export const V_PLEIN = 6.0;
+// Le rail régulé ne permet pas de déduire un pourcentage de charge.
+export class SuiviTension {
+  constructor() { this.reinitialiser(); }
 
-/** Pourcentage de batterie estimé (0 à 100). */
-export const niveauBatterie = (volts) => Math.round(Math.min(1, Math.max(0, (volts - V_VIDE) / (V_PLEIN - V_VIDE))) * 100);
+  reinitialiser() { this.minimum = null; this.basDepuis = null; this.dernier = null; }
+
+  actualiser(e, maintenant) {
+    if (this.dernier !== null && maintenant - this.dernier > 1000) this.basDepuis = null;
+    this.dernier = maintenant;
+    const valide = Number.isFinite(e.tension) && e.tension > 0;
+    if (valide) this.minimum = this.minimum === null ? e.tension : Math.min(this.minimum, e.tension);
+    const basse = valide && e.tension < 5.6;
+    if (basse && e.vitesse < 2) this.basDepuis ??= maintenant;
+    else this.basDepuis = null;
+    if (e.flags.batterie || (this.basDepuis !== null && maintenant - this.basDepuis >= 2000)) return 'faible';
+    return basse ? 'chute' : 'normal';
+  }
+}
 
 /** Nombre de barres (1 à 4) pour une force de signal en dBm ; 0 si inconnue. */
 export function barresSignal(rssi) {
@@ -31,21 +41,18 @@ export class TableauDeBord {
     this.racine = racine;
     this.q = (s) => racine.querySelector(s);
     // On retrouve chaque élément UNE fois ; les trames d'état arrivent 10 fois par seconde.
-    const ids = ['tension', 'batt-pct', 'batt-jauge', 'vitesse', 'sonar', 'cap', 'pos', 'libre', 'cible', 'mode', 'drapeaux'];
+    const ids = ['tension', 'tension-min', 'vitesse', 'sonar', 'cap', 'pos', 'libre', 'cible', 'mode', 'drapeaux'];
     this.el = Object.fromEntries(ids.map((id) => [id, racine.querySelector(`#b-${id}`)]));
     this.radar = new Radar(this.q('#radar-canvas'));
     this.drapeauxAffiches = '';
   }
 
   /** Met à jour tous les compteurs à partir d'une trame ÉTAT décodée. `modes` = liste des comportements. */
-  majEtat(e, modes, pos = { x: e.x / 1000, y: e.y / 1000 }) { // pos : position absolue en mètres (la carte glisse avec le rover)
+  majEtat(e, modes, pos = { x: e.x / 1000, y: e.y / 1000 }, minimum = e.tension) { // pos : position absolue en mètres (la carte glisse avec le rover)
     const el = this.el;
     const virgule = (v, n) => v.toFixed(n).replace('.', ',');
-    const pct = niveauBatterie(e.tension);
     poserTexte(el.tension, virgule(e.tension, 1));
-    poserTexte(el['batt-pct'], `${pct} %`);
-    if (el['batt-jauge']._pct !== pct) { el['batt-jauge']._pct = pct; el['batt-jauge'].style.setProperty('--niveau', `${pct}%`); }
-    poserDonnee(el['batt-jauge'], 'niveau', pct < 15 || e.flags.batterie ? 'bas' : pct < 35 ? 'moyen' : 'bon');
+    poserTexte(el['tension-min'], minimum === null ? '—' : `${virgule(minimum, 1)} V`);
     poserTexte(el.vitesse, e.vitesse);
     poserTexte(el.sonar, e.sonar === 0 ? '—' : e.sonar >= 255 ? '2,5+' : virgule(e.sonar / 100, 2));
     poserTexte(el.cap, Math.round((e.cap + 360) % 360));

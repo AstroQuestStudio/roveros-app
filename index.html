@@ -66,7 +66,7 @@
       </div>
       <button type="button" class="stat stat-batt" id="entete-batt" hidden title="Batterie du rover : ouvrir le tableau de bord" data-vue-lien="bord">
         <span class="ico-batt" id="entete-batt-ico"></span>
-        <span class="stat-textes"><span class="stat-val"><span id="entete-batt-pct" class="chiffres">—</span><span id="entete-batt-v" class="chiffres stat-sous">—</span></span></span>
+        <span class="stat-textes"><span class="stat-val"><span id="entete-batt-v" class="chiffres">—</span><span id="entete-batt-etat" class="etat-tension">normal</span></span></span>
       </button>
       <div class="stat stat-lat" title="Temps aller-retour avec le rover (PING / PONG)">
         <span id="liaison-signal" class="signal" data-barres="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
@@ -240,9 +240,9 @@
         <h1>Tableau de bord</h1>
         <div class="tuiles">
           <div class="tuile large">
-            <div class="tuile-nom">Batterie</div>
-            <div class="batt-ligne"><span class="gros chiffres" id="b-tension">—</span><span class="unite">V</span><span class="petit chiffres" id="b-batt-pct">—</span></div>
-            <div class="jauge" id="b-batt-jauge" data-niveau="bon" aria-hidden="true"><i></i></div>
+            <div class="tuile-nom">Tension</div>
+            <div class="batt-ligne"><span class="gros chiffres" id="b-tension">—</span><span class="unite">V</span></div>
+            <div class="petit">Minimum depuis la connexion : <span class="chiffres" id="b-tension-min">—</span></div>
           </div>
           <div class="tuile"><div class="tuile-nom">Vitesse</div><div><span class="gros chiffres" id="b-vitesse">0</span><span class="unite">cm/s</span></div></div>
           <div class="tuile"><div class="tuile-nom">Sonar</div><div><span class="gros chiffres" id="b-sonar">—</span><span class="unite">m</span></div></div>

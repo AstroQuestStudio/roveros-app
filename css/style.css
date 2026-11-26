@@ -125,6 +125,7 @@ button.stat { cursor: pointer; }
 .stat-textes { display: flex; flex-direction: column; line-height: 15px; }
 .stat-val { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .stat-sous { display: none; font-size: 12px; font-weight: 400; color: var(--t2); }
+.etat-tension { font-size: 11px; font-weight: 400; }
 .stat-ico { color: var(--accent); }
 .stat-paysage { display: none; }
 .entete-batt[data-niveau="bas"] .stat-val, .stat-batt[data-niveau="bas"] .stat-val { color: var(--negatif); }
@@ -175,6 +176,17 @@ button.stat { cursor: pointer; }
   .marque { pointer-events: none; }
   .entete .marque-nom { display: none; } /* en portrait le logo suffit : la place va au nom du rover */
   .puce-liaison { max-width: 170px; }
+}
+
+@media (orientation: portrait) and (max-width: 480px) {
+  .entete { gap: 3px; padding: 0 6px; }
+  .rover-menu { flex: 0 1 auto; min-width: 0; padding-left: 4px; margin-left: 0; }
+  .puce-liaison { min-width: 0; width: 100%; gap: 3px; }
+  .puce-titre { font-size: 12px; }
+  .stat { gap: 3px; padding-left: 4px; }
+  .stat-val { gap: 3px; font-size: 12px; }
+  .etat-tension { font-size: 10px; }
+  .stat-sous { display: none; }
 }
 
 /* ================= Paysage : menu latéral + barre d'informations ================= */
