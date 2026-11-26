@@ -18,6 +18,8 @@ import { poserTexte, poserDonnee } from './utile.js';
 import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
 import { commandesVitesse, limiterVitesse } from './vitesse.js';
 import { MesureLatence } from './latence.js';
+import { Patrouille, MAX_POINTS, MIN_POINTS } from './patrouille.js';
+import { phraseMateriel, materielInquietant } from './materiel.js';
 
 const $ = (sel, racine = document) => racine.querySelector(sel);
 const $$ = (sel, racine = document) => [...racine.querySelectorAll(sel)];
@@ -159,6 +161,11 @@ carte.addEventListener('vue', (ev) => $('#btn-recentrer').classList.toggle('acti
 
 /** Toucher un point de la carte : marqueur + trame ALLER. */
 function allerAuPoint(x, y) {
+  if (patrouille.actif) { // en mode patrouille, chaque toucher ajoute un point numéroté (le simple « aller ici » reste le comportement normal)
+    if (patrouille.ajouter(x, y)) vibrer(8); else afficherToast('err', `${MAX_POINTS} points au plus`);
+    majPatrouille();
+    return;
+  }
   if (S.urgence.actif) { afficherToast('err', "Arrêt d'urgence actif : déverrouillez-le pour bouger"); return; }
   if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
   carte.poserMarqueur(x, y);
@@ -218,6 +225,7 @@ function surEtatLiaison(t, { etat, message }) {
   if (etat !== 'connecte') {
     pilote.toutArreter();
     diagnostic.reinitialiser();
+    S.veille = false;
     $('#liaison-signal').dataset.barres = '0';
     latence.reinitialiser();
     poserTexte($('#lat-val'), '— ms');
@@ -276,6 +284,7 @@ function surTrame(octets) {
     case 'chemin': carte.definirChemin(m.points); break;
     case 'texte': surLigne(m.texte); break;
     case 'pong': if (latence.surPong(m.n) !== null) afficherDetailLiaison(); break;
+    case 'maj': break; // mise à jour du firmware (0xA0) : elle se fait depuis le PC, on ignore
     default: break; // type inconnu : on l'ignore sans bruit
   }
 }
@@ -296,6 +305,8 @@ function surEtat(e) {
   poserTexte($('#bar-vitesse'), `${(e.vitesse / 100).toFixed(2).replace('.', ',')} m/s`);
   poserTexte($('#bar-cap'), `${Math.round(e.cap)}°`);
   majPosition(e, precedent);
+  if (S.modes[e.comportement] === 'patrouille') S.enPatrouille = true;
+  else if (S.enPatrouille && !patrouille.actif) { S.enPatrouille = false; patrouille.effacer(); majPatrouille(); } // patrouille terminée : on retire les points
   surfaceModeActif(e);
   majLigneEtat(e);
   if (e.flags.arrive && !(precedent?.flags.arrive)) carte.retirerMarqueur();
@@ -314,6 +325,7 @@ function contexteEtat() {
     commande: pilote.sortie,
     urgenceApp: S.urgence.actif,
     mode: nomMode,
+    veille: S.veille,
   };
 }
 
@@ -405,9 +417,14 @@ function surLigne(texte) {
     case 'modes': S.modes = l.modes; rendreModes(); break;
     case 'param': reglages.majParam(l); surParamRecu(l); break;
     case 'evt':
-      noter('evt', l.message);
+      // veille et réveil : sobrement, dans la pastille d'état et le journal, sans notification
+      noter('evt', l.message, { toast: !/^(veille|r[ée]veil)/i.test(l.message) });
+      if (/^veille\b/i.test(l.message)) { S.veille = true; majLigneEtat(S.etat); }
+      else if (/^r[ée]veil/i.test(l.message)) { S.veille = false; majLigneEtat(S.etat); }
       if (/repos[ée]|remises? à zéro/i.test(l.message)) signalerRecalage();
+      else if (/carte (effacée|vidée|remise)/i.test(l.message)) carte.effacerCarte(); // la carte arrive « par différences » : on vide aussi la nôtre
       break;
+    case 'materiel': afficherMateriel(l.valeurs); break;
     case 'err': noter('err', l.message); break;
     case 'calib': noter('evt', `Calibration : ${Object.entries(l.valeurs).map(([k, v]) => `${k} = ${v}`).join(', ')}`); break;
     default: break;
@@ -434,6 +451,7 @@ function rendreModes() {
     $('.mode-nom', b).textContent = libelleMode(nom);
     $('.mode-aide', b).textContent = connu?.aide ?? 'Comportement du rover';
     b.addEventListener('click', () => {
+      if (nom === 'patrouille') { ouvrirPatrouille(); return; }
       const arg = nom === 'carre' || nom === 'glisse' ? ` ${S.cote}` : '';
       if (envoyerTexte(`mode ${nom}${arg}`)) {
         vibrer(15);
@@ -442,6 +460,14 @@ function rendreModes() {
     });
     grille.append(b);
   }
+  if (!noms.includes('patrouille')) { // toujours visible : grisée, avec une explication courte
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'mode indisponible'; b.dataset.mode = 'patrouille'; b.setAttribute('aria-disabled', 'true');
+    b.innerHTML = `${icone('patrouille', 24)}<span class="mode-nom">Patrouille</span><span class="mode-aide">Pas encore disponible sur ce rover</span>`;
+    b.addEventListener('click', () => afficherToast('err', "Ce rover ne propose pas encore la patrouille"));
+    grille.append(b);
+  }
+  majPatrouille();
   if (S.etat) surfaceModeActif(S.etat);
 }
 
@@ -816,6 +842,82 @@ $('#sw-securites').addEventListener('click', () => basculerSecurites($('#sw-secu
 $('#btn-securites-remettre').addEventListener('click', () => basculerSecurites(true));
 majSecurites();
 
+// -- Patrouille par points : on touche jusqu'à 6 points sur la carte, numérotés, puis « Lancer » --
+const patrouille = new Patrouille();
+const patrouilleDispo = () => S.modes.includes('patrouille');
+
+function majPatrouille() {
+  carte.etapes = patrouille.points;
+  carte.invalide = true;
+  const dispo = patrouilleDispo();
+  const bouton = $('#btn-patrouille');
+  bouton.disabled = !dispo || !S.transport?.connecte;
+  const aide = $('#patrouille-aide');
+  aide.hidden = dispo;
+  aide.textContent = dispo ? '' : "Ce rover ne propose pas encore la patrouille.";
+  bouton.title = dispo ? '' : "Ce rover ne propose pas encore la patrouille.";
+  const n = patrouille.points.length;
+  poserTexte($('#patrouille-texte'), n === 0 ? `Touchez jusqu'à ${MAX_POINTS} points sur la carte.`
+    : n < MIN_POINTS ? `Point 1 posé : ajoutez-en au moins un autre.`
+      : patrouille.pleine ? `${n} points : c'est complet. Lancez la patrouille.` : `${n} points posés (${MAX_POINTS} au plus).`);
+  $('#pat-lancer').disabled = !patrouille.lancable || !dispo || S.urgence.actif;
+  $('#pat-annuler').disabled = n === 0;
+  $('#pat-effacer').disabled = n === 0;
+}
+function ouvrirPatrouille() {
+  if (!patrouilleDispo()) { afficherToast('err', "Ce rover ne propose pas encore la patrouille"); return; }
+  S.avantPatrouille = S.vue === 'carte' ? 'pilotage' : S.vue;
+  patrouille.actif = true; patrouille.effacer(); S.enPatrouille = false;
+  allerA('carte'); // la carte seule : les manettes sont masquées pendant qu'on pose les points
+  $('#patrouille').hidden = false;
+  majPatrouille();
+}
+function fermerPatrouille(retour = true) {
+  patrouille.actif = false;
+  $('#patrouille').hidden = true;
+  if (retour) allerA(S.avantPatrouille ?? 'pilotage');
+  majPatrouille();
+}
+$('#btn-patrouille').addEventListener('click', ouvrirPatrouille);
+$('#pat-annuler').addEventListener('click', () => { patrouille.annulerDernier(); majPatrouille(); });
+$('#pat-effacer').addEventListener('click', () => { patrouille.effacer(); majPatrouille(); });
+$('#pat-fermer').addEventListener('click', () => { patrouille.effacer(); fermerPatrouille(); });
+$('#pat-lancer').addEventListener('click', () => {
+  const commande = patrouille.commande();
+  if (!commande) return;
+  if (envoyerTexte(commande)) {
+    afficherToast('evt', `Patrouille lancée : ${patrouille.points.length} points`);
+    vibrer(15);
+    fermerPatrouille(); // les points restent affichés tant que la patrouille tourne
+  }
+});
+majPatrouille();
+
+// -- Semi-veille : « veille <secondes> » (0 = jamais) --
+function envoyerVeille(secondes) {
+  const s = Math.max(0, Math.min(3600, Math.round(Number(secondes))));
+  if (!Number.isFinite(s)) return;
+  if (envoyerTexte(`veille ${s}`)) {
+    $$('#seg-veille button').forEach((b) => b.classList.toggle('actif', Number(b.dataset.s) === s));
+    $('#veille-s').value = $$('#seg-veille button').some((b) => Number(b.dataset.s) === s) ? '' : s;
+    afficherToast('evt', s > 0 ? `Veille après ${s} s sans rien faire` : 'Veille désactivée');
+  }
+}
+$$('#seg-veille button').forEach((b) => b.addEventListener('click', () => envoyerVeille(b.dataset.s)));
+$('#veille-ok').addEventListener('click', () => { if ($('#veille-s').value !== '') envoyerVeille($('#veille-s').value); });
+
+// -- Matériel du rover : une ligne lisible, à la demande --
+function afficherMateriel(valeurs) {
+  const texte = phraseMateriel(valeurs);
+  poserTexte($('#b-materiel'), texte || 'Réponse du rover illisible.');
+  $('#b-materiel-boite').classList.toggle('inquietant', materielInquietant(valeurs));
+}
+$('#btn-materiel').addEventListener('click', () => {
+  if (!S.transport?.connecte) { poserTexte($('#b-materiel'), 'Pas de liaison avec le rover.'); return; }
+  poserTexte($('#b-materiel'), 'Demande en cours…');
+  envoyerTexte('materiel', { silencieux: true });
+});
+
 // ============================================================================
 // 11. Réglages : commandes rapides, radar
 // ============================================================================
@@ -846,6 +948,7 @@ function allerA(nom) {
   });
   tiroir(false);
   fermerMenusFlottants();
+  if (patrouille.actif && nom !== 'carte') { patrouille.actif = false; $('#patrouille').hidden = true; majPatrouille(); }
   if (section === 'pilotage') { carte.demarrer(); carte.redimensionner(); placerEchelle(); } else { carte.arreter(); manetteXY.relacher(); manetteRot.relacher(); }
   if (nom === 'bord') { bord.demarrer(); if (S.etat) bord.majEtat(S.etat, S.modes); } else bord.arreter();
   if (nom === 'partage') montrerPartage();

@@ -500,11 +500,12 @@ input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border-radius
   /* Le tiroir devient une fenêtre au-dessus de l'arrêt d'urgence, plus étroite que l'espace entre les manettes */
   .tiroir {
     left: 50%; right: auto; transform: translateX(-50%); width: min(380px, 38%); min-width: 270px;
-    bottom: calc(var(--bas-sûr) + var(--h-urg) + clamp(10px, 2.4vh, 22px) + clamp(32px, 6.4vh, 56px) + 24px); max-height: calc(100% - var(--haut) - 12px);
+    bottom: calc(var(--bas-sûr) + var(--h-urg) + clamp(10px, 2.4vh, 22px) + 10px); max-height: calc(100% - var(--haut) - 12px);
     gap: 6px; padding: 10px;
   }
   .tiroir-titre { display: none; }
-  .tiroir .deck-seg button { min-height: 40px; }
+  .tiroir .deck-seg button { min-height: 36px; }
+  .tiroir-aide { display: none; } /* l'explication est dans l'infobulle du bouton grisé */
   .tiroir .interrupteur.interrupteur-compact, .tiroir .bascule { min-height: 40px; }
   .tiroir-nav { display: none; }
   .tiroir-couches { display: none; }

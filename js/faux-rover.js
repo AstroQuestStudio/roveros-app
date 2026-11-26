@@ -108,6 +108,7 @@ const DEFAUTS = {
   v_max: [0.5, 0.05, 1.2], // m/s : vitesse maximale à la manette
   v_rapide: [0.5, 0.05, 1.2], // m/s : vitesse que le rover s'autorise quand le sonar voit la voie libre
   w_max: [2.4, 0.5, 5.0], // rad/s : rotation maximale
+  vue_large: [0, 0, 600], // s : toutes les N secondes la tête balaie large à la manette (0 = jamais)
   v_aveugle_man: [0.35, 0.05, 1.0], // m/s : vitesse maximale dans une direction que la tête ne regarde pas
   accel: [1.5, 0.3, 4.0],
   dist_arret: [0.06, 0.02, 0.4],
