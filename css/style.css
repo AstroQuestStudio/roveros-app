@@ -110,7 +110,7 @@ button { cursor: pointer; }
 .menu-flottant {
   position: absolute; z-index: 40; top: calc(100% + 8px); left: 0; min-width: 200px; padding: 6px;
   display: flex; flex-direction: column; gap: 2px; border-radius: 16px;
-  background: rgba(9, 21, 31, 0.96); border: 1px solid var(--vitre-bord); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  background: #0a1722; border: 1px solid var(--vitre-bord); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
 .menu-flottant button, .menu-flottant label {
   display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 12px; border: 0; border-radius: 10px;
