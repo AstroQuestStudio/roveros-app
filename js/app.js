@@ -211,6 +211,7 @@ function utiliserTransport(transport) {
   rendreModes();
   transport.addEventListener('etat', (ev) => { if (S.transport === transport) surEtatLiaison(transport, ev.detail); });
   transport.addEventListener('trame', (ev) => { if (S.transport === transport) surTrame(ev.detail); });
+  transport.addEventListener('ecriture', (ev) => { if (S.transport !== transport) return; S.ecritureKo = !ev.detail.ok; noter(ev.detail.ok ? 'app' : 'err', ev.detail.ok ? 'Les commandes repartent' : 'Les écritures Bluetooth échouent : le rover ne reçoit plus les commandes', { toast: false }); majLigneEtat(S.etat); });
   transport.connecter();
 }
 
@@ -230,7 +231,7 @@ function surEtatLiaison(t, { etat, message }) {
   if (etat !== 'connecte') {
     pilote.toutArreter();
     diagnostic.reinitialiser();
-    S.veille = false; carte.veille = false; S.tEtat = 0;
+    S.veille = false; carte.veille = false; S.tEtat = 0; S.ecritureKo = false;
     $('#liaison-signal').dataset.barres = '0';
     latence.reinitialiser();
     poserTexte($('#lat-val'), '— ms');
@@ -339,6 +340,7 @@ function contexteEtat() {
     veille: S.veille,
     restant: distanceRestante(),
     silenceMs: S.tEtat ? performance.now() - S.tEtat : 0,
+    ecritureKo: S.ecritureKo,
     formaterDistance,
   };
 }

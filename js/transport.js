@@ -35,6 +35,7 @@ export class Transport extends EventTarget {
     this._dernierEnvoi = -Infinity;
     this._ecritureEnCours = false;
     this.envoyees = 0; // compteur, pratique pour les tests et le diagnostic
+    this.echecs = 0; // écritures consécutives en échec
     this.jetees = 0; // trames remplacées ou périmées avant d'avoir été écrites
     this.fileMax = 0; // plus grande longueur atteinte par la file
   }
@@ -122,7 +123,11 @@ export class Transport extends EventTarget {
           ]);
         } finally { clearTimeout(garde); }
         this.envoyees++;
+        if (this.echecs >= 5) this.dispatchEvent(new CustomEvent('ecriture', { detail: { ok: true } })); // les ordres repartent
+        this.echecs = 0;
       } catch (erreur) {
+        this.echecs++;
+        if (this.echecs === 5) this.dispatchEvent(new CustomEvent('ecriture', { detail: { ok: false } })); // 5 écritures de suite en échec : on le dit
         // Un ordre vital (urgence, stop) est retenté ; le reste est abandonné (le suivant arrive vite).
         const vital = element.trame[0] === T.URGENCE || element.trame[0] === T.STOP;
         if (vital && element.tentatives < 5 && this.connecte) {

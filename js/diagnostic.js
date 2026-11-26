@@ -49,6 +49,7 @@ export function phraseEtat(e, ctx = {}) {
     const texte = ctx.liaison === 'connexion' || ctx.liaison === 'reconnexion' ? 'Connexion au rover…' : 'Pas de rover connecté';
     return { texte, niveau: 'neutre', cle: 'liaison' };
   }
+  if (ctx.ecritureKo) return { texte: 'Les commandes ne partent plus (écriture Bluetooth en échec)', niveau: 'danger', cle: 'ecriture-ko' };
   if (!e) return { texte: 'En attente du rover…', niveau: 'neutre', cle: 'attente' };
   // la liaison est ouverte mais le rover ne donne plus d'état : l'écran ne doit pas afficher un « Prêt à rouler » périmé
   if (ctx.silenceMs > 2500) return { texte: `Plus de nouvelles du rover depuis ${Math.round(ctx.silenceMs / 1000)} s`, niveau: 'alerte', cle: 'silence' };

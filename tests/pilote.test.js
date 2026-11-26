@@ -244,3 +244,19 @@ test('repère : par défaut la trame MANETTE a le bit « monde » à 0 (joystick
   b.avancer(300);
   assert.equal(manettes(b.sorties).pop().trame[4], 1);
 });
+
+test("file d'envoi : cinq écritures de suite en échec sont signalées (les commandes ne partent plus), puis le retour à la normale", async () => {
+  class Capricieux extends Transport {
+    constructor() { super('test'); this.panne = true; }
+    async _ecrire() { if (this.panne) throw new Error('GATT operation failed'); }
+  }
+  const t = new Capricieux();
+  t._changerEtat('connecte');
+  const evenements = [];
+  t.addEventListener('ecriture', (ev) => evenements.push(ev.detail.ok));
+  for (let i = 0; i < 8; i++) { t.envoyer(encoderTexte(`a${i}`)); await attendre(60); }
+  assert.deepEqual(evenements, [false], 'signalé une seule fois, au cinquième échec');
+  t.panne = false;
+  t.envoyer(encoderTexte('b')); await attendre(80);
+  assert.deepEqual(evenements, [false, true]);
+});

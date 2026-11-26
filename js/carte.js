@@ -134,7 +134,7 @@ export class VueCarte extends EventTarget {
     r.sonar = e.sonar;
     // Avec le lissage, c'est la boucle d'affichage qui déplace le rover image par image (voir _appliquerLissage).
     // Sans lui, ou quand la carte n'est pas à l'écran, on prend la position telle qu'elle arrive.
-    if (!r.ok || !this.lissage || !this.actif) {
+    if (!r.ok || !this.lissage || !this.actif || document.hidden) { // (onglet masqué : la boucle d'affichage ne tourne pas)
       r.x = x; r.y = y; r.cap = cap; r.tete = tete;
       if (this.trace.ajouter(x, y) && this.couches.trace) this.invalide = true;
     }
