@@ -25,6 +25,7 @@ import { PORTEE_ALLER_MAX } from './repere.js';
 import { diagnosticMateriel, aDiagnosticEtendu } from './materiel.js';
 import { detecterFirmware, libelleFirmware } from './firmware.js';
 import { CourseJeu } from './course-ui.js';
+import { Demo, annonceDemo, COMMANDE_DEMO } from './demo.js';
 import {
   lireEnteteMaj, verifierCompatibilitePaquet, tailleBlocPourMtu, PilotageMaj, verifierApresRedemarrage,
 } from './maj.js';
@@ -81,6 +82,7 @@ const S = {
 const suiviTension = new SuiviTension();
 const journal = new JournalSeance();
 const courseJeu = new CourseJeu(document); // carte Course : sans effet hors course
+const demo = new Demo(); // carte « Démo » de l'onglet Modes (demo.js)
 const stockageJournal = new StockageJournal(journal);
 stockageJournal.charger().then((ok) => { if (ok && $('#dlg-journal').open) rendreJournal(); });
 stockageJournal.demarrer(3000);
@@ -399,6 +401,7 @@ function utiliserTransport(transport) {
   S.materiel = null; S.acquisition = null; S.acqBrut = null; S.nav = null; S.liaison = null; S.diagDemandeSession = false;
   S.profils = []; S.etat = null; S.champs = null; S.champsDemandesSession = false;
   S.majEtatRover = null; S.majBrut = null; S.numCarteOrigine = null; S.calibEtapes = []; S.autotestResultats = [];
+  demo.reinitialiser(); afficherDemo();
   S.decalagePerfMs = null; S.journalReleveEnCours = false;
   S.profil = detecterFirmware({}, []);
   essaiQualite.arreter();
@@ -443,6 +446,8 @@ function surEtatLiaison(t, { etat, message }) {
   puce.dataset.etat = etat;
   poserTexte($('#liaison-texte'), etat === 'connecte' ? nomLiaison(t) : LIBELLES_ETAT[etat]);
   puce.title = etat === 'connecte' ? 'Liaison établie' : (message || (etat === 'deconnecte' ? 'Touchez pour vous connecter' : ''));
+  demo.liaison(etat === 'connecte');
+  afficherDemo();
   majMenuRover();
   $('#carte-vide').hidden = etat === 'connecte' || carte.rover.ok;
   if (etat !== 'connecte') {
@@ -726,6 +731,7 @@ function surLigne(texte) {
   if (l.genre !== 'param' && l.genre !== 'champs' && l.genre !== 'journal_rover') reglages.ecrireConsole(texteComplet, 'entrant', l.genre);
   if (l.genre !== 'champs' && l.genre !== 'journal_rover') journal.noterTexte(performance.now(), texteComplet);
   if (l.genre === 'evt' || l.genre === 'err') courseJeu.ligne(texteComplet, performance.now());
+  if (/d[ée]mo/i.test(texteComplet) && demo.ligne(texteComplet)) afficherDemo();
   switch (l.genre) {
     case 'champs':
       journal.noterChamps(performance.now(), l.valeurs);
@@ -955,7 +961,7 @@ function appliquerProfilUI() {
 function rendreModes() {
   const grille = $('#modes-grille');
   grille.textContent = '';
-  const noms = S.modes.filter((n) => n !== 'manuel');
+  const noms = S.modes.filter((n) => n !== 'manuel' && n !== 'demo'); // la démo a sa propre carte
   $('#modes-vide').hidden = noms.length > 0;
   if (noms.length === 0) {
     poserTexte($('#modes-vide-texte'), S.modesRecus
@@ -969,6 +975,8 @@ function rendreModes() {
   const calibDispo = noms.includes('calibrer') || S.profil.capacites.calibrationAuto;
   $('#calib-boite').hidden = !calibDispo;
   $('#autotest-boite').hidden = !noms.includes('autotest');
+  $('#demo-boite').hidden = !annonceDemo(S.modes);
+  afficherDemo();
   for (const nom of noms) {
     const connu = MODES_FR[nom];
     const b = document.createElement('button');
@@ -1039,6 +1047,17 @@ function rendreCalibJournal() {
     li.textContent = e.texte;
     liste.append(li);
   }
+}
+
+/** Affiche la carte Démo (état, phrase, détail, résultat) d'après le module demo.js. */
+function afficherDemo() {
+  const v = demo.vue();
+  poserTexte($('#demo-etat'), v.libelle);
+  poserTexte($('#demo-phrase'), v.phrase);
+  poserTexte($('#demo-detail'), v.detail);
+  poserTexte($('#demo-resultat'), v.duree && v.distance ? `Durée ${v.duree}, distance ${v.distance}.` : '');
+  $('#demo-boite').dataset.etat = v.etat;
+  $('#btn-demo-lancer').disabled = !v.lancable;
 }
 
 function traiterLigneAutotest(message, erreur = false) {
@@ -1112,6 +1131,10 @@ $('#btn-autotest-court').addEventListener('click', () => {
   rendreAutotest();
   if (envoyerTexte('mode autotest')) { poserTexte($('#autotest-etat'), 'En cours…'); vibrer(15); }
 });
+$('#btn-demo-lancer').addEventListener('click', () => {
+  if (!demo.peutLancer()) return;
+  if (envoyerTexte(COMMANDE_DEMO)) { demo.demarrer(); afficherDemo(); vibrer(15); }
+});
 $('#btn-autotest-roues').addEventListener('click', () => {
   S.autotestResultats = [];
   rendreAutotest();
@@ -1130,6 +1153,7 @@ function envoyerUrgence(actif) {
   const t = S.transport;
   if (!t?.connecte) return;
   if (actif) t.viderFile();
+  if (actif && demo.arreter()) afficherDemo();
   t.envoyer(encoderUrgence(actif), { priorite: true });
   if (actif) t.envoyer(encoderStop(), { priorite: true }); // le protocole demande 0x03 01 puis 0x02
 }

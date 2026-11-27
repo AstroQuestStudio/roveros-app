@@ -225,7 +225,7 @@ test('faux rover : joue le firmware Rust complet (info, modes, materiel+acquisit
   assert.match(ligneInfo, /version=rust100-0\.1/);
   assert.match(ligneInfo, /nom=LODILABIDON/);
   // rust100/src/systeme.rs:446
-  assert.equal(ligneModes, 'modes manuel aller course explorer base patrouille chien calibrer autotest');
+  assert.equal(ligneModes, 'modes manuel aller course explorer base patrouille chien calibrer autotest demo');
 
   rover.recevoir(encoderTexte('materiel'));
   assert.ok(textes.some((t) => t.startsWith('materiel ') && t.includes('pile0=6388') && t.includes('code_ram=55252') && t.includes('raz=tension')));
