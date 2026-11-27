@@ -26,6 +26,112 @@ export class Limiteur {
 
 const ARRONDI_MIN_CM = 1;
 
+const fmtVitesse = (v) => `${v.toFixed(2).replace('.', ',')} m/s`;
+
+/**
+ * Traduit un code `frein` du cœur Rust (coeur/src/pilote.rs) en explication claire.
+ * Partagé entre l'affichage en direct (Pilotage) et l'analyse du journal.
+ */
+export function traduireFrein(frein, direction = { cle: 'avant', devant: 'devant', cote: 'devant lui' }, plafond = null) {
+  const cap = Number.isFinite(plafond) && plafond >= 0 ? ` à ${fmtVitesse(plafond)}` : '';
+  switch (frein) {
+    case 1:
+      return {
+        cle: 'frein-1',
+        enDirect: `Ralenti${cap} : obstacle vu ${direction.devant}`,
+        analyse: 'le rover voyait un obstacle devant',
+      };
+    case 2:
+      return {
+        cle: 'frein-2',
+        enDirect: direction.cle === 'avant'
+          ? `Ralenti${cap} : direction que le rover ne regarde pas`
+          : `Ralenti${cap} : il ne regarde pas ${direction.cote}`,
+        analyse: 'direction que le rover ne regardait pas',
+      };
+    case 3:
+      return {
+        cle: 'frein-3',
+        enDirect: `Ralenti${cap} : obstacle sur la carte dans le passage`,
+        analyse: 'obstacle sur la carte dans le passage',
+      };
+    case 4:
+      return {
+        cle: 'frein-4',
+        enDirect: `Ralenti${cap} : zone incertaine sur la carte`,
+        analyse: 'zone incertaine sur la carte',
+      };
+    case 5:
+      return {
+        cle: 'frein-5',
+        enDirect: `Ralenti${cap} : obstacle vu sur le côté`,
+        analyse: 'le rover voyait un obstacle sur le côté',
+      };
+    case 6:
+      return {
+        cle: 'frein-6',
+        enDirect: `Ralenti${cap} : obstacle tout près`,
+        analyse: 'obstacle tout près du rover',
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Détermine la cause principale d'un ralentissement ou arrêt à partir d'un état + contexte.
+ * Utilisée par `phraseEtat` (direct) et `analyserJournal` (a posteriori).
+ */
+export function causeLimitation(e, ctx = {}) {
+  if (!e) return null;
+  const f = e.flags ?? {};
+  const d = directionMot(ctx.commande);
+  const pousse = ctx.pousse ?? (Math.abs(ctx.commande?.vx ?? 0) > 5 || Math.abs(ctx.commande?.vy ?? 0) > 5 || Math.abs(ctx.commande?.w ?? 0) > 5);
+
+  if (ctx.ecritureKo) return { cle: 'ecriture-ko', niveau: 'danger', enDirect: 'Les commandes ne partent plus (écriture Bluetooth en échec)', analyse: "échec d'écriture Bluetooth" };
+  if (f.urgence || ctx.urgenceApp) return { cle: 'urgence', niveau: 'danger', enDirect: "Arrêt d'urgence : maintenez le bouton rouge pour déverrouiller", analyse: "arrêt d'urgence actif" };
+  if (f.driver_ko) return { cle: 'driver_ko', niveau: 'danger', enDirect: 'Pilote des moteurs en panne : le rover ne peut pas rouler', analyse: 'carte moteurs muette (driver_ko)' };
+  if (f.souleve) return { cle: 'souleve', niveau: 'danger', enDirect: 'Pris en main, ou roues sans prise : cap non tenu', analyse: 'rover soulevé ou roues sans prise' };
+  if (f.choc) return { cle: 'choc', niveau: 'danger', enDirect: 'Contact avec un obstacle : le rover a ressenti un choc', analyse: 'contact détecté avec un obstacle' };
+  if (f.blocage) return { cle: 'blocage', niveau: 'danger', enDirect: 'Roue bloquée : le rover est coincé', analyse: 'roue bloquée' };
+  if (f.garde && (pousse || ctx.trouEnvoi)) return { cle: 'garde', niveau: 'alerte', enDirect: "Plus d'ordre reçu : arrêté (liaison coupée ?)", analyse: "le rover s'est arrêté de lui-même (garde)" };
+  if (f.obstacle) {
+    const cm = e.libre > 0 && e.libre < 255 ? Math.max(ARRONDI_MIN_CM, Math.round(e.libre)) : null;
+    return {
+      cle: 'obstacle',
+      niveau: 'alerte',
+      enDirect: cm !== null ? `Obstacle à ${cm} cm ${d.devant}` : `Arrêté : obstacle ${d.devant}`,
+      analyse: d.cle === 'avant' || d.cle === 'arriere' ? `le rover voyait un obstacle ${d.devant}` : `le rover voyait un obstacle ${d.devant}`,
+    };
+  }
+  if (f.laisse) return { cle: 'laisse', niveau: 'alerte', enDirect: 'Limite de zone atteinte : le rover ne va pas plus loin', analyse: 'limite de zone atteinte' };
+  if (f.imu_ko) return { cle: 'imu_ko', niveau: 'danger', enDirect: 'Centrale inertielle en panne : cap non tenu', analyse: 'centrale inertielle en panne' };
+  if (f.aveugle) {
+    return {
+      cle: 'aveugle',
+      niveau: 'alerte',
+      enDirect: d.cle === 'avant' || !pousse
+        ? "Ralenti : il avance vers une zone qu'il n'a pas regardée"
+        : `Ralenti : il ne voit pas ${d.cote}`,
+      analyse: 'direction que le rover ne regardait pas',
+    };
+  }
+  if (pousse && Number.isFinite(ctx.plafond) && ctx.plafond >= 0 && ctx.frein >= 1 && ctx.frein <= 6) {
+    const vRef = ctx.vConsigne ?? ctx.vMax ?? 1;
+    if (ctx.plafond < vRef * 0.95) {
+      const fr = traduireFrein(ctx.frein, d, ctx.plafond);
+      if (fr) return { cle: fr.cle, niveau: 'alerte', enDirect: fr.enDirect, analyse: fr.analyse };
+    }
+  }
+  if (f.patine) return { cle: 'patine', niveau: 'alerte', enDirect: 'Les roues patinent : le rover glisse', analyse: 'les roues patinaient' };
+  if (f.batterie || (Number.isFinite(e.tension) && e.tension > 0 && e.tension < 5.6)) {
+    return { cle: 'batterie', niveau: 'alerte', enDirect: 'Batterie faible : rechargez bientôt', analyse: 'tension batterie basse' };
+  }
+  if (f.retard) return { cle: 'retard', niveau: 'alerte', enDirect: 'Le rover est surchargé : commandes en retard', analyse: 'boucle du rover en retard' };
+  if (ctx.liaisonRalentie && pousse) return { cle: 'liaison-lente', niveau: 'alerte', enDirect: 'Ralenti : liaison Bluetooth ralentie', analyse: 'liaison Bluetooth ralentie' };
+  return null;
+}
+
 /** Où regarde le rover : d'après la commande de l'utilisateur (vx, vy en %), sinon « devant ». */
 export function directionMot(commande) {
   const { vx = 0, vy = 0 } = commande ?? {};
@@ -54,30 +160,8 @@ export function phraseEtat(e, ctx = {}) {
   // la liaison est ouverte mais le rover ne donne plus d'état : l'écran ne doit pas afficher un « Prêt à rouler » périmé
   if (ctx.silenceMs > 2500) return { texte: `Plus de nouvelles du rover depuis ${Math.round(ctx.silenceMs / 1000)} s`, niveau: 'alerte', cle: 'silence' };
   const f = e.flags;
-  const d = directionMot(commande);
-
-  if (f.urgence || ctx.urgenceApp) return { texte: "Arrêt d'urgence : maintenez le bouton rouge pour déverrouiller", niveau: 'danger', cle: 'urgence' };
-  if (f.driver_ko) return { texte: 'Pilote des moteurs en panne : le rover ne peut pas rouler', niveau: 'danger', cle: 'driver_ko' };
-  if (f.souleve) return { texte: 'Pris en main, ou roues sans prise : cap non tenu', niveau: 'danger', cle: 'souleve' };
-  if (f.choc) return { texte: 'Contact avec un obstacle : le rover a ressenti un choc', niveau: 'danger', cle: 'choc' };
-  if (f.blocage) return { texte: 'Roue bloquée : le rover est coincé', niveau: 'danger', cle: 'blocage' };
-  if (f.garde && pousse) return { texte: 'Plus d\'ordre reçu : arrêté (liaison coupée ?)', niveau: 'alerte', cle: 'garde' };
-  if (f.obstacle) {
-    const cm = e.libre > 0 && e.libre < 255 ? Math.max(ARRONDI_MIN_CM, Math.round(e.libre)) : null;
-    const texte = cm !== null ? `Obstacle à ${cm} cm ${d.devant}` : `Arrêté : obstacle ${d.devant}`;
-    return { texte, niveau: 'alerte', cle: 'obstacle' };
-  }
-  if (f.laisse) return { texte: 'Limite de zone atteinte : le rover ne va pas plus loin', niveau: 'alerte', cle: 'laisse' };
-  if (f.imu_ko) return { texte: 'Centrale inertielle en panne : cap non tenu', niveau: 'danger', cle: 'imu_ko' };
-  if (f.aveugle) {
-    const texte = d.cle === 'avant' || !pousse
-      ? "Ralenti : il avance vers une zone qu'il n'a pas regardée"
-      : `Ralenti : il ne voit pas ${d.cote}`;
-    return { texte, niveau: 'alerte', cle: 'aveugle' };
-  }
-  if (f.patine) return { texte: 'Les roues patinent : le rover glisse', niveau: 'alerte', cle: 'patine' };
-  if (f.batterie) return { texte: 'Batterie faible : rechargez bientôt', niveau: 'alerte', cle: 'batterie' };
-  if (f.retard) return { texte: 'Le rover est surchargé : commandes en retard', niveau: 'alerte', cle: 'retard' };
+  const cause = causeLimitation(e, { ...ctx, commande, pousse });
+  if (cause) return { texte: cause.enDirect, niveau: cause.niveau, cle: cause.cle };
   const fmt = ctx.formaterDistance ?? ((m) => `${Math.round(m * 100)} cm`);
   if (f.arrive && ctx.restant != null && ctx.restant > 0.3) {
     // le rover dit « arrivé » alors qu'il n'est pas sur la cible (par exemple au bord de sa carte) : on le dit

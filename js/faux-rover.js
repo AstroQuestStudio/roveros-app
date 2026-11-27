@@ -189,6 +189,10 @@ export class FauxRover {
     this.veilleS = 0; // délai avant la semi-veille, en secondes (0 = jamais)
     this.veille = false;
     this.tOrdre = 0; // heure du dernier ordre reçu
+    this.plafond = -1;
+    this.frein = 0;
+    this.aLim = 1.5;
+    this.cycles = 0;
   }
 
   // ===== Fenêtre de carte =====
@@ -335,6 +339,28 @@ export class FauxRover {
         break;
       }
       case 'infos': this.envoyerInfos(); break;
+      case 'champ': {
+        const disponibles = {
+          plafond: this.plafond,
+          frein: this.frein,
+          tension: Math.round(this.tension * 100) / 100,
+          a_lim: this.aLim,
+          cycles: this.cycles,
+          vx: Math.round(this.vxb * 1000) / 1000,
+          vy: Math.round(this.vyb * 1000) / 1000,
+          w: Math.round(this.w * 1000) / 1000,
+          tete: Math.round(this.tete * 10) / 10,
+          sonar: this.dernierEcho / 100,
+          d_libre: this.libreCm === 255 ? -1 : this.libreCm / 100,
+          retards: 0,
+        };
+        const noms = args.slice(0, 5);
+        if (noms.length === 0) { this.err('champ : au moins un nom attendu'); break; }
+        const inconnu = noms.find((n) => !(n in disponibles));
+        if (inconnu) { this.err(`champ inconnu : ${inconnu}`); break; }
+        this.texte('c ' + noms.map((n) => `${n}=${disponibles[n]}`).join(' '));
+        break;
+      }
       case 'veille': {
         const v = Number(args[0]);
         if (Number.isFinite(v) && v >= 0) { this.veilleS = v; this.evt(v > 0 ? `veille après ${v} s` : 'veille désactivée'); } else this.err('veille : nombre de secondes attendu');
@@ -786,6 +812,7 @@ export class FauxRover {
 
   pas(dt = PAS) {
     this.t += dt;
+    this.cycles += Math.round(dt * 200);
     this.majCible(dt);
     let cmd = this.calculerCommande(dt);
     cmd = this.appliquerSecurites(cmd);
@@ -818,6 +845,8 @@ export class FauxRover {
     this.obstacle = false;
     const vit = Math.hypot(vx, vy);
     this.libreCm = 255;
+    this.plafond = -1;
+    this.frein = 0;
     if (vit > 0.02) {
       const c = Math.cos(this.cap); const s = Math.sin(this.cap);
       const wx = (vx * c + vy * s) / vit; const wy = (-vx * s + vy * c) / vit;
@@ -832,9 +861,14 @@ export class FauxRover {
       this.libreCm = this.aveugle ? 255 : Math.round(limiter(marge * 100, 0, 254));
       let k = 1;
       if (this.params.reflexe.v >= 0.5) {
-        if (marge < arret) { k = 0; this.obstacle = true; } else if (marge < arret + 0.15) k = (marge - arret) / 0.15;
+        if (marge < arret) { k = 0; this.obstacle = true; this.plafond = 0; this.frein = 1; }
+        else if (marge < arret + 0.15) { k = (marge - arret) / 0.15; this.plafond = Math.round(vit * k * 100) / 100; this.frein = 1; }
       }
-      if (this.aveugle && this.params.carte_on.v >= 0.5) k = Math.min(k, 0.5);
+      if (this.aveugle && this.params.carte_on.v >= 0.5) {
+        k = Math.min(k, 0.5);
+        const pv = Math.round(vit * k * 100) / 100;
+        if (this.plafond < 0 || pv < this.plafond) { this.plafond = pv; this.frein = 2; }
+      }
       vx *= k; vy *= k;
     } else this.aveugle = false;
     this.tObstacle = this.obstacle && this.mode !== 'manuel' ? this.tObstacle + PAS : 0;

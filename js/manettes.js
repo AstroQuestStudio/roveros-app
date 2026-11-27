@@ -28,7 +28,8 @@ export function courbeManette(x, y, { aideAxes = true } = {}) {
   const mag = Math.hypot(x, y);
   if (mag < ZONE_MORTE_MANETTE) return { x: 0, y: 0 };
   const t = Math.min(1, (mag - ZONE_MORTE_MANETTE) / (1 - ZONE_MORTE_MANETTE));
-  const k = (0.3 * t + 0.7 * t * t) / mag;
+  // Dès la sortie de la zone morte, au moins 1 % de consigne pour éviter une bande morte cachée à l'arrondi.
+  const k = (0.01 + 0.99 * (0.3 * t + 0.7 * t * t)) / mag;
   x *= k; y *= k;
   if (aideAxes) {
     const ax = Math.abs(x); const ay = Math.abs(y);
@@ -54,7 +55,7 @@ export class Manette {
    *                          surChangement(x, y) : valeurs entre −1 et 1, y positif = vers le haut
    *                          surAppui() / surRelache() : pour le retour tactile (vibration)
    */
-  constructor(zone, racine, { axes = 'xy', surChangement = () => {}, surAppui = () => {}, surRelache = () => {} } = {}) {
+  constructor(zone, racine, { axes = 'xy', surChangement = () => {}, surAppui = () => {}, surRelache = () => {}, surDoigt = null } = {}) {
     this.zone = zone;
     this.racine = racine;
     this.pouce = racine.querySelector('.manette-pouce');
@@ -62,8 +63,11 @@ export class Manette {
     this.surChangement = surChangement;
     this.surAppui = surAppui;
     this.surRelache = surRelache;
+    this.surDoigt = surDoigt;
     this.x = 0; this.y = 0;
     this._id = null;
+    this._capturee = false;
+    this._horsZone = false;
     this.desactive = false;
     this._centre = { x: 0, y: 0, rayon: 1 };
     zone.style.touchAction = 'none';
@@ -71,32 +75,43 @@ export class Manette {
     zone.addEventListener('pointermove', (ev) => this._mouvement(ev));
     zone.addEventListener('pointerup', (ev) => this._levee(ev));
     zone.addEventListener('pointercancel', (ev) => this._levee(ev));
-    zone.addEventListener('lostpointercapture', (ev) => this._levee(ev));
+    // Repli sur window : si la capture échoue ou est perdue en multipoint, le relâchement hors zone reste détecté.
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('pointermove', (ev) => this._mouvement(ev));
+      window.addEventListener('pointerup', (ev) => this._levee(ev));
+      window.addEventListener('pointercancel', (ev) => this._levee(ev));
+      window.addEventListener('blur', () => this.relacher());
+    }
   }
 
   _appui(ev) {
-    if (this._id !== null || this.desactive) return;
-    ev.preventDefault();
+    if (this.desactive) return;
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+    ev.preventDefault(); // toujours empêcher le navigateur d'interpréter un second doigt comme un geste
+    if (this._id !== null) return;
     this._id = ev.pointerId;
-    try { this.zone.setPointerCapture(ev.pointerId); } catch { /* pointeur déjà relâché */ }
+    this._horsZone = false;
+    this._capturee = false;
+    try { this.zone.setPointerCapture(ev.pointerId); this._capturee = true; } catch { /* pointeur déjà relâché ou capture refusée */ }
     this.zone.classList.add('active');
     // Le disque se recentre sous le doigt (sans sortir de la zone).
     const z = this.zone.getBoundingClientRect();
-    const rayon = this.racine.offsetWidth / 2;
+    const rayon = Math.max(1, this.racine.offsetWidth / 2);
     const marge = Math.min(rayon, z.width / 2, z.height / 2);
     const cx = Math.min(Math.max(ev.clientX - z.left, marge), z.width - marge);
     const cy = Math.min(Math.max(ev.clientY - z.top, marge), z.height - marge);
     this.racine.style.left = `${cx}px`;
     this.racine.style.top = `${cy}px`;
     this._centre = { x: z.left + cx, y: z.top + cy, rayon };
+    this._zoneRect = z;
     this.surAppui();
-    this._mouvement(ev);
+    this._mouvement(ev, true);
   }
 
-  _mouvement(ev) {
+  _mouvement(ev, estAppui = false) {
     if (ev.pointerId !== this._id) return;
     const { x: ox, y: oy, rayon } = this._centre;
-    const course = rayon * 0.62; // distance maximale du pouce par rapport au centre
+    const course = Math.max(1, rayon * 0.62); // distance maximale du pouce par rapport au centre
     let dx = ev.clientX - ox;
     let dy = ev.clientY - oy;
     if (this.axes === 'x') dy = 0;
@@ -104,16 +119,30 @@ export class Manette {
     if (d > course) { dx = (dx / d) * course; dy = (dy / d) * course; }
     this.pouce.style.transition = 'none';
     this.pouce.style.transform = `translate(${dx}px, ${dy}px)`;
-    this._valeurs(dx / course, -dy / course);
+    const bx = dx / course;
+    const by = -dy / course;
+    const r = this._zoneRect;
+    const hors = !!r && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom);
+    if (this.surDoigt) {
+      if (estAppui) this.surDoigt('appui', bx, by);
+      else if (hors && !this._horsZone) this.surDoigt('sortie', bx, by);
+      else this.surDoigt('mouvement', bx, by);
+    }
+    this._horsZone = hors;
+    this._valeurs(bx, by);
   }
 
   _levee(ev) {
     if (ev.pointerId !== this._id) return;
+    if (this._capturee) { try { this.zone.releasePointerCapture(ev.pointerId); } catch { /* déjà relâché */ } }
     this._id = null;
+    this._capturee = false;
+    this._horsZone = false;
     this.zone.classList.remove('active');
     this.racine.style.left = ''; this.racine.style.top = ''; // retour à la position de repos
     this.pouce.style.transition = '';
     this.pouce.style.transform = '';
+    if (this.surDoigt) this.surDoigt('relache', 0, 0);
     this._valeurs(0, 0);
     this.surRelache();
   }
@@ -127,11 +156,15 @@ export class Manette {
 
   /** Relâche de force (changement d'onglet, urgence...). */
   relacher() {
-    if (this._id !== null) { try { this.zone.releasePointerCapture(this._id); } catch { /* déjà relâché */ } }
+    if (this._id === null) return;
+    if (this._capturee) { try { this.zone.releasePointerCapture(this._id); } catch { /* déjà relâché */ } }
     this._id = null;
+    this._capturee = false;
+    this._horsZone = false;
     this.zone.classList.remove('active');
     this.racine.style.left = ''; this.racine.style.top = '';
     this.pouce.style.transform = '';
+    if (this.surDoigt) this.surDoigt('annule', 0, 0);
     this._valeurs(0, 0);
   }
 }
@@ -193,6 +226,7 @@ export const REGLAGES_PILOTE = {
   espaceMin: 45, // jamais deux envois « de changement » plus proches que cela
   stopRepetitions: 3, // STOP envoyés au relâchement
   stopEspace: 60,
+  delaiZoneMorteMs: 250, // grâce lors d'un passage au centre sans lâcher le doigt
 };
 
 export class Pilote {
@@ -211,6 +245,7 @@ export class Pilote {
       clavier: { x: 0, y: 0, w: 0 },
       inclinaison: { x: 0, y: 0 },
     };
+    this.contacts = new Set(); // sources avec un doigt actuellement posé
     this.monde = false; // repère du monde ou du rover
     this.bloque = false; // arrêt d'urgence verrouillé : on n'envoie plus rien
     this.sortie = { vx: 0, vy: 0, w: 0 }; // dernière commande lissée en pour cent, pour l'affichage
@@ -218,6 +253,8 @@ export class Pilote {
     this._lisse = { vx: 0, vy: 0, w: 0 };
     this._dernierEnvoye = null;
     this._tEnvoi = -Infinity;
+    this._tChangement = -Infinity;
+    this._tReposContact = null;
     this._enMarche = false; // une trame de marche est partie depuis le dernier arrêt
     this._stopsRestants = 0;
     this._tStop = -Infinity;
@@ -228,6 +265,12 @@ export class Pilote {
 
   /** Abonne un affichage : fn({ vx, vy, w, actif }) est appelée à chaque tic. */
   surTic(fn) { this._ecouteurs.add(fn); }
+
+  /** Indique si un doigt est actuellement posé sur une source (empêche STOP sur bref passage par zéro). */
+  definirContact(nom, pose) {
+    if (pose) this.contacts.add(nom); else this.contacts.delete(nom);
+    if (!pose) { this._tReposContact = null; this._tic(); }
+  }
 
   /** Change une source (joystick, rotation, clavier, inclinaison) ET réagit tout de suite. */
   maj(nom, valeur) { this.sources[nom] = valeur; this._tic(); }
@@ -249,13 +292,13 @@ export class Pilote {
     };
   }
 
-  /** Lissage : un zéro est immédiat ; sinon filtre du premier ordre, plus court quand on ralentit. */
-  _lisser(cible, dt) {
+  /** Lissage : zéro immédiat au relâchement ; avec doigt posé, descente lissée pour ne pas couper au centre. */
+  _lisser(cible, dt, doigtPose = false) {
     const r = this.reglages;
     for (const k of ['vx', 'vy', 'w']) {
       const c = cible[k];
       let l = this._lisse[k];
-      if (c === 0) l = 0;
+      if (c === 0 && !doigtPose) l = 0;
       else {
         const accelere = l === 0 || (Math.sign(c) === Math.sign(l) && Math.abs(c) >= Math.abs(l));
         l += (c - l) * (1 - Math.exp(-dt / (accelere ? r.tauMontee : r.tauDescente)));
@@ -270,24 +313,40 @@ export class Pilote {
     const r = this.reglages;
     const dt = limiter(maintenant - this._tPrec, 0, 100);
     this._tPrec = maintenant;
-    const c = this._lisser(this.calculer(), dt);
+    const cible = this.calculer();
+    const cibleActive = cible.vx !== 0 || cible.vy !== 0 || cible.w !== 0;
+    const doigtPose = this.contacts.size > 0;
+    if (cibleActive) this._tReposContact = null;
+    else if (doigtPose) this._tReposContact ??= maintenant;
+    else this._tReposContact = null;
+
+    const c = this._lisser(cible, dt, doigtPose);
     this.sortie = c;
     const actif = c.vx !== 0 || c.vy !== 0 || c.w !== 0;
+    const graceZoneMorte = doigtPose && this._enMarche && this._tReposContact !== null
+      && maintenant - this._tReposContact < r.delaiZoneMorteMs;
 
     if (this.bloque) {
       // Arrêt d'urgence : le reste de l'application s'en charge, on ne dit plus rien.
       this._enMarche = false; this._stopsRestants = 0;
-    } else if (actif) {
+    } else if (actif || (this._enMarche && (cibleActive || graceZoneMorte))) {
       this._stopsRestants = 0;
       const d = this._dernierEnvoye;
+      const periode = 1000 / r.frequence;
       const ecoule = maintenant - this._tEnvoi;
       const ecart = d ? Math.max(Math.abs(c.vx - d.vx), Math.abs(c.vy - d.vy), Math.abs(c.w - d.w)) : Infinity;
       const axeChange = d && ['vx', 'vy', 'w'].some((k) => (c[k] === 0) !== (d[k] === 0));
-      if (ecoule >= 1000 / r.frequence || ((ecart >= r.seuilChangement || axeChange) && ecoule >= r.espaceMin)) {
+      const battement = ecoule >= periode;
+      const changement = (ecart >= r.seuilChangement || axeChange) && (maintenant - this._tChangement >= r.espaceMin);
+      if (battement || changement) {
         this.envoyer(encoderManette(c.vx, c.vy, c.w, this.monde));
         this.stats.manette++;
         this._dernierEnvoye = { ...c };
-        this._tEnvoi = maintenant;
+        if (changement) this._tChangement = maintenant;
+        // Cadence verrouillée sur l'horloge réelle : un tic en retard ne décale pas tous les suivants.
+        this._tEnvoi = battement && Number.isFinite(this._tEnvoi) && ecoule < 2 * periode
+          ? this._tEnvoi + periode
+          : maintenant;
         this._enMarche = true;
       }
     } else if (this._enMarche) {
@@ -309,6 +368,8 @@ export class Pilote {
     s.joystick.x = s.joystick.y = 0; s.rotation.x = 0;
     s.clavier.x = s.clavier.y = s.clavier.w = 0;
     s.inclinaison.x = s.inclinaison.y = 0;
+    this.contacts.clear();
+    this._tReposContact = null;
     this._lisse = { vx: 0, vy: 0, w: 0 };
   }
 }

@@ -707,9 +707,42 @@ button.choix:active { transform: scale(0.99); }
 
 .journal { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .journal li { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 8px 12px; border-radius: 8px; background: var(--s3); font-size: 14px; line-height: 20px; user-select: text; -webkit-user-select: text; }
+.journal li.jr-bloc { display: flex; flex-direction: column; gap: 4px; }
+.journal li.jr-neutre { color: var(--t3); }
+.journal li.jr-repere { border-left: 3px solid var(--ambre); }
+.jr-repere-tete { font-size: 13px; font-weight: 600; color: var(--ambre); }
+.jr-repere-suite { font-size: 13px; color: var(--t2); }
+.jr-actions { margin-bottom: 10px; }
+.jr-stats { margin-bottom: 8px; font-size: 13px; color: var(--t2); }
+.jr-sous { margin: 14px 0 6px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--t3); }
 .journal .heure { color: var(--t3); font-family: var(--police-mono); font-size: 12px; padding-top: 1px; }
 .journal li.err { color: var(--negatif); }
 .journal li.app { color: var(--t2); }
+
+/* Bouton Marquer sur Pilotage : gros, atteignable au pouce sans lâcher la manette */
+.btn-marquer {
+  position: absolute; z-index: 6; right: 10px; bottom: calc(var(--bas-sûr) + 96px + clamp(150px, 27dvh, 260px) + 10px);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; min-width: 112px; padding: 0 16px; border-radius: 999px;
+  background: var(--vitre); border: 1px solid var(--vitre-bord); color: var(--t1);
+  font-size: 14px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  touch-action: manipulation;
+  transition: transform 150ms var(--facilite), border-color 150ms var(--facilite), background-color 150ms var(--facilite);
+}
+.btn-marquer .ico { color: var(--ambre); }
+.btn-marquer:active { transform: scale(0.96); background: var(--s3); border-color: var(--ambre); }
+.btn-marquer.pose { border-color: var(--ambre); background: rgba(58, 38, 6, 0.9); color: #ffd08a; }
+#app[data-gaucher="1"] .btn-marquer { right: auto; left: 10px; }
+#app[data-vue="carte"] .btn-marquer, #app[data-dispo="carte"] .btn-marquer { display: none; }
+@media (orientation: landscape) {
+  .btn-marquer {
+    right: auto; left: calc(var(--menu-off) + (100% - var(--menu-off)) / 2); transform: translateX(-50%);
+    bottom: calc(var(--bas-sûr) + var(--h-urg) + clamp(10px, 2.4vh, 22px) + 12px);
+    min-height: 44px; padding: 0 18px;
+  }
+  #app[data-gaucher="1"] .btn-marquer { left: calc(var(--menu-off) + (100% - var(--menu-off)) / 2); }
+  .btn-marquer:active { transform: translateX(-50%) scale(0.96); }
+}
 
 /* ================= Notifications ================= */
 

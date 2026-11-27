@@ -321,6 +321,7 @@ export function analyserLigne(ligne) {
     case 'modes': return { genre: 'modes', modes: reste.split(',').map((s) => s.trim()).filter(Boolean), texte };
     case 'evt': return { genre: 'evt', message: reste, texte };
     case 'err': return { genre: 'err', message: reste, texte };
+    case 'c': return { genre: 'champs', valeurs: analyserCles(reste), texte };
     case 'p': {
       const [nom, valeur, min, max] = reste.split(/\s+/);
       const v = Number(valeur);

@@ -6,7 +6,7 @@ import {
 } from './protocole.js';
 import { TransportBle, bluetoothDisponible } from './transport-ble.js';
 import { TransportWs, normaliserUrlWs } from './transport-ws.js';
-import { TransportDemo } from './transport-demo.js';
+import { TransportDemo, alimenterDemoJournal } from './transport-demo.js';
 import { VueCarte, formaterDistance } from './carte.js';
 import { Manette, Clavier, Pilote } from './manettes.js';
 import { Inclinaison } from './inclinaison.js';
@@ -23,6 +23,10 @@ import { Patrouille, MAX_POINTS, MIN_POINTS } from './patrouille.js';
 import { PORTEE_ALLER_MAX } from './repere.js';
 import { diagnosticMateriel, aDiagnosticEtendu } from './materiel.js';
 import { detecterFirmware, libelleFirmware } from './firmware.js';
+import {
+  JournalSeance, StockageJournal, analyserJournal, exporterJson,
+  CHAMPS_RUST_DEMANDES, SOURCES_DOIGT, ACTIONS_DOIGT,
+} from './journal.js';
 
 const $ = (sel, racine = document) => racine.querySelector(sel);
 const $$ = (sel, racine = document) => [...racine.querySelectorAll(sel)];
@@ -45,6 +49,9 @@ const S = {
   acquisition: null,
   profils: [],
   etat: null, // dernière trame ÉTAT décodée
+  champs: null, // derniers champs supplémentaires (plafond, frein…)
+  champsDemandesSession: false,
+  liaisonRalentieJusqua: 0,
   urgence: { actif: false, essais: 0 },
   journal: [],
   cote: 0.5,
@@ -52,6 +59,10 @@ const S = {
   nonLus: 0,
 };
 const suiviTension = new SuiviTension();
+const journal = new JournalSeance();
+const stockageJournal = new StockageJournal(journal);
+stockageJournal.charger().then((ok) => { if (ok && $('#dlg-journal').open) rendreJournal(); });
+stockageJournal.demarrer(3000);
 
 // ============================================================================
 // 2. Icônes (injectées dans les éléments portant data-icone)
@@ -109,6 +120,51 @@ function afficherToast(genre, texte) {
 }
 
 function rendreJournal() {
+  const analyse = analyserJournal(journal);
+  const dureeS = Math.round(analyse.dureeMs / 1000);
+  const st = analyse.stats;
+  poserTexte($('#jr-stats'), st.manettes + st.etats + st.stops === 0
+    ? 'Aucune trame enregistrée dans cette séance.'
+    : `Séance ${dureeS} s · ${st.manettes} manettes · ${st.stops} STOP · ${st.etats} états · ${st.trousEnvoi} trous envoi · ${st.trousReception} trous réception`);
+
+  const resumeEl = $('#jr-resume');
+  resumeEl.textContent = '';
+  const phrases = analyse.resume.length > 0 ? analyse.resume : ['Aucune anomalie détectée pour l’instant.'];
+  for (const p of phrases) {
+    const li = document.createElement('li');
+    li.className = analyse.resume.length > 0 ? 'jr-bloc' : 'jr-bloc jr-neutre';
+    li.textContent = p;
+    resumeEl.append(li);
+  }
+
+  const repEl = $('#jr-reperes');
+  repEl.textContent = '';
+  if (analyse.reperes.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'jr-bloc jr-neutre';
+    li.textContent = 'Aucun repère posé. Utilisez « Marquer » sur Pilotage dès que vous sentez une hésitation.';
+    repEl.append(li);
+  } else {
+    for (const r of [...analyse.reperes].reverse()) {
+      const li = document.createElement('li');
+      li.className = 'jr-bloc jr-repere';
+      const tete = document.createElement('span');
+      tete.className = 'jr-repere-tete';
+      tete.textContent = `${r.heure} — ${r.note}`;
+      li.append(tete);
+      for (const ph of r.phrases) {
+        const sub = document.createElement('span');
+        sub.className = 'jr-repere-suite';
+        sub.textContent = ph;
+        li.append(sub);
+      }
+      repEl.append(li);
+    }
+  }
+
+  $('#jr-partager').hidden = !navigator.share;
+  $('#jr-demo').hidden = S.transport?.nom !== 'demo';
+
   const liste = $('#journal-liste');
   liste.textContent = '';
   for (const e of [...S.journal].reverse()) {
@@ -122,13 +178,61 @@ function rendreJournal() {
   $('#journal-vide').hidden = S.journal.length > 0;
 }
 
+function construireFichierJournal() {
+  const contenu = JSON.stringify(exporterJson(journal), null, 2);
+  const d = new Date(journal.debutHorlogeMs);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const nom = `roveros-journal-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.json`;
+  return { nom, blob: new Blob([contenu], { type: 'application/json' }) };
+}
+
 $('#btn-journal').addEventListener('click', () => {
   S.nonLus = 0; $('#journal-pastille').hidden = true; $('#journal-pastille').classList.remove('erreur');
   rendreJournal(); ouvrirFeuille($('#dlg-journal'));
 });
 $('#btn-journal-reglages').addEventListener('click', () => $('#btn-journal').click());
 $('#jr-fermer').addEventListener('click', () => fermerFeuilles());
-$('#jr-effacer').addEventListener('click', () => { S.journal.length = 0; rendreJournal(); });
+$('#jr-effacer').addEventListener('click', () => {
+  S.journal.length = 0;
+  stockageJournal.effacer().then(rendreJournal);
+});
+$('#jr-exporter').addEventListener('click', () => {
+  const { nom, blob } = construireFichierJournal();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nom;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  afficherToast('evt', `Fichier ${nom} enregistré`);
+});
+$('#jr-partager').addEventListener('click', async () => {
+  const { nom, blob } = construireFichierJournal();
+  try {
+    const fichier = new File([blob], nom, { type: 'application/json' });
+    if (navigator.canShare?.({ files: [fichier] })) {
+      await navigator.share({ title: 'Journal RoverOS', files: [fichier] });
+      return;
+    }
+    await navigator.share({ title: 'Journal RoverOS', text: analyserJournal(journal).resume.join('\n') || 'Séance RoverOS' });
+  } catch (err) {
+    if (err?.name !== 'AbortError') afficherToast('err', 'Partage de fichier indisponible sur ce navigateur');
+  }
+});
+$('#jr-demo').addEventListener('click', () => {
+  alimenterDemoJournal(journal);
+  stockageJournal.sauvegarder();
+  rendreJournal();
+});
+$('#btn-marquer').addEventListener('click', () => {
+  journal.marquer(performance.now());
+  stockageJournal.sauvegarder();
+  vibrer(20);
+  const b = $('#btn-marquer');
+  b.classList.add('pose');
+  setTimeout(() => b.classList.remove('pose'), 650);
+  afficherToast('evt', 'Repère posé dans le journal');
+  if ($('#dlg-journal').open) rendreJournal();
+});
 
 // -- Fenêtres (feuilles) : non modales pour que l'arrêt d'urgence reste utilisable --
 function ouvrirFeuille(d) {
@@ -204,6 +308,10 @@ function envoyerTexte(texte, { silencieux = false } = {}) {
 }
 
 const pilote = new Pilote((trame) => S.transport?.envoyer(trame) ?? false);
+const masqueDoigts = () => (pilote.contacts.has('joystick') ? 1 : 0)
+  | (pilote.contacts.has('rotation') ? 2 : 0)
+  | (pilote.contacts.has('inclinaison') ? 4 : 0)
+  | (pilote.contacts.has('clavier') ? 8 : 0);
 
 // ============================================================================
 // 6. Liaison : connexion, état, PING
@@ -215,7 +323,7 @@ function utiliserTransport(transport) {
   if (S.transport) { S.transport.deconnecter(); }
   S.transport = transport;
   S.modes = []; S.modesRecus = false; S.info = {}; S.infoRecue = false; S.annonces = {};
-  S.materiel = null; S.acquisition = null; S.profils = []; S.etat = null;
+  S.materiel = null; S.acquisition = null; S.profils = []; S.etat = null; S.champs = null; S.champsDemandesSession = false;
   S.profil = detecterFirmware({}, []);
   essaiQualite.arreter();
   reglages.vider();
@@ -224,9 +332,24 @@ function utiliserTransport(transport) {
   afficherMateriel();
   actualiserProfil();
   rendreModes();
+  transport.surEnvoi = (trame, t0) => {
+    if (S.transport !== transport) return -1;
+    return journal.noterEnvoi(t0, trame, PREF.vitesse, masqueDoigts());
+  };
+  transport.surFinEcriture = (id, ok, dureeMs) => {
+    if (S.transport !== transport) return;
+    journal.noterFinEcriture(id, ok, dureeMs);
+    if (!ok || dureeMs >= 100) {
+      S.liaisonRalentieJusqua = performance.now() + 1500;
+      majLigneEtat(S.etat);
+    }
+  };
   transport.addEventListener('etat', (ev) => { if (S.transport === transport) surEtatLiaison(transport, ev.detail); });
   transport.addEventListener('trame', (ev) => { if (S.transport === transport) surTrame(ev.detail); });
   transport.addEventListener('ecriture', (ev) => { if (S.transport !== transport) return; S.ecritureKo = !ev.detail.ok; noter(ev.detail.ok ? 'app' : 'err', ev.detail.ok ? 'Les commandes repartent' : 'Les écritures Bluetooth échouent : le rover ne reçoit plus les commandes', { toast: false }); majLigneEtat(S.etat); });
+  if (transport.nom === 'demo' && journal.envois.type.subarray(0, Math.min(journal.envois.total, journal.envois.cap)).every((tp) => tp !== 0x01)) {
+    alimenterDemoJournal(journal, performance.now());
+  }
   transport.connecter();
 }
 
@@ -248,12 +371,15 @@ function surEtatLiaison(t, { etat, message }) {
     pilote.toutArreter();
     diagnostic.reinitialiser();
     essaiQualite.arreter();
-    S.veille = false; carte.veille = false; S.tEtat = 0; S.ecritureKo = false;
+    S.veille = false; carte.veille = false; S.tEtat = 0; S.ecritureKo = false; S.champs = null; S.champsDemandesSession = false;
     $('#liaison-signal').dataset.barres = '0';
     latence.reinitialiser();
     poserTexte($('#lat-val'), '— ms');
     poserTexte($('#bar-vitesse'), '0,00 m/s');
-  } else latence.reinitialiser();
+  } else {
+    latence.reinitialiser();
+  }
+  journal.noterLiaison(performance.now(), etat, message, t.nom, S.profil);
   if (etat === 'erreur') noter('err', message || 'Liaison perdue');
   else if (etat !== 'connexion') noter('app', `Liaison : ${LIBELLES_ETAT[etat].toLowerCase()}${message && etat !== 'deconnecte' ? ` (${message})` : ''}`, { toast: false });
   majVerrouEcran();
@@ -284,6 +410,14 @@ setInterval(() => {
   latence.tic();
   afficherDetailLiaison();
 }, 2000);
+
+// Champs supplémentaires sur firmware Rust (plafond, frein, tension, a_lim, cycles) : seulement quand le rover bouge (ne gêne jamais la veille).
+setInterval(() => {
+  const t = S.transport;
+  if (!t?.connecte || S.profil.famille !== 'rust' || S.veille) return;
+  const bouge = pilote.sortie.vx !== 0 || pilote.sortie.vy !== 0 || pilote.sortie.w !== 0 || S.etat?.flags?.mouvement || (S.etat?.vitesse ?? 0) > 2;
+  if (bouge) t.envoyer(encoderTexte(`champ ${CHAMPS_RUST_DEMANDES.join(' ')}`));
+}, 250);
 
 // Le rover se tait (état plus reçu depuis 2,5 s) : la pastille d'état le dit tout de suite.
 setInterval(() => { if (S.transport?.connecte && S.etat && performance.now() - S.tEtat > 2500) majLigneEtat(S.etat); }, 500);
@@ -330,6 +464,7 @@ function surEtat(e) {
   const precedent = S.etat;
   S.etat = e;
   S.tEtat = performance.now();
+  journal.noterEtat(S.tEtat, e);
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
   const etatTension = suiviTension.actualiser(e, S.tEtat);
@@ -360,6 +495,9 @@ const diagnostic = new Diagnostic();
 function contexteEtat() {
   const e = S.etat;
   const nomMode = e && e.comportement !== 0 && S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : '';
+  const maintenant = performance.now();
+  const silenceMs = S.tEtat ? maintenant - S.tEtat : 0;
+  const pousse = Math.abs(pilote.sortie.vx) > 5 || Math.abs(pilote.sortie.vy) > 5 || Math.abs(pilote.sortie.w) > 5;
   return {
     liaison: S.transport?.etat ?? 'deconnecte',
     commande: pilote.sortie,
@@ -367,8 +505,12 @@ function contexteEtat() {
     mode: nomMode,
     veille: S.veille,
     restant: distanceRestante(),
-    silenceMs: S.tEtat ? performance.now() - S.tEtat : 0,
+    silenceMs,
     ecritureKo: S.ecritureKo,
+    plafond: S.champs?.plafond,
+    frein: S.champs?.frein,
+    vMax: PREF.vitesse,
+    liaisonRalentie: maintenant < (S.liaisonRalentieJusqua ?? 0) || (pousse && silenceMs > 450),
     formaterDistance,
   };
 }
@@ -470,13 +612,24 @@ function majBatterieEntete(e, etat) {
 
 function surLigne(texte) {
   const l = analyserLigne(texte);
-  if (l.genre !== 'param') reglages.ecrireConsole(texte, 'entrant', l.genre);
+  if (l.genre !== 'param' && l.genre !== 'champs') reglages.ecrireConsole(texte, 'entrant', l.genre);
+  if (l.genre !== 'champs') journal.noterTexte(performance.now(), texte);
   switch (l.genre) {
+    case 'champs':
+      journal.noterChamps(performance.now(), l.valeurs);
+      S.champs = l.valeurs;
+      majLigneEtat(S.etat);
+      break;
     case 'info':
       Object.assign(S.info, l.valeurs);
       S.infoRecue = true;
       if (typeof l.valeurs.cellule === 'number') carte.definirCellule(l.valeurs.cellule);
       actualiserProfil();
+      if (S.profil.famille === 'rust' && !S.champsDemandesSession && S.transport?.connecte) {
+        S.champsDemandesSession = true;
+        journal.champsDemandes = [...CHAMPS_RUST_DEMANDES];
+        S.transport.envoyer(encoderTexte(`champ ${CHAMPS_RUST_DEMANDES.join(' ')}`));
+      }
       break;
     case 'modes':
       S.modes = l.modes;
@@ -802,14 +955,22 @@ appliquerAffichage();
 // -- Manettes flottantes --
 const manetteXY = new Manette($('#zone-xy'), $('#manette-xy'), {
   surChangement: (x, y) => pilote.maj('joystick', { x, y }),
-  surAppui: () => vibrer(8),
+  surAppui: () => { pilote.definirContact('joystick', true); vibrer(8); },
+  surRelache: () => pilote.definirContact('joystick', false),
+  surDoigt: (act, x, y) => journal.noterDoigt(performance.now(), SOURCES_DOIGT.xy, ACTIONS_DOIGT[act] ?? 1, x, y),
 });
 const manetteRot = new Manette($('#zone-rot'), $('#manette-rot'), {
   axes: 'x',
   surChangement: (x) => pilote.maj('rotation', { x }),
-  surAppui: () => vibrer(8),
+  surAppui: () => { pilote.definirContact('rotation', true); vibrer(8); },
+  surRelache: () => pilote.definirContact('rotation', false),
+  surDoigt: (act, x, y) => journal.noterDoigt(performance.now(), SOURCES_DOIGT.rot, ACTIONS_DOIGT[act] ?? 1, x, y),
 });
-new Clavier((x, y, w) => pilote.maj('clavier', { x, y, w }));
+new Clavier((x, y, w) => {
+  pilote.definirContact('clavier', x !== 0 || y !== 0 || w !== 0);
+  journal.noterDoigt(performance.now(), SOURCES_DOIGT.clavier, (x || y || w) ? 1 : 2, x, y);
+  pilote.maj('clavier', { x, y, w });
+});
 
 /** Repère de la manette : le ROVER par défaut (haut = là où regarde son capteur). Jamais mémorisé. */
 function choisirRepere(monde) {
@@ -898,11 +1059,17 @@ zoneXY.addEventListener('pointerdown', (ev) => {
   ev.preventDefault();
   try { zoneXY.setPointerCapture(ev.pointerId); } catch { /* pointeur déjà relâché */ }
   zoneXY.classList.add('active');
-  incl.maintenu = true; majInclinaison(); vibrer(8);
+  incl.maintenu = true;
+  pilote.definirContact('inclinaison', true);
+  journal.noterDoigt(performance.now(), SOURCES_DOIGT.inclinaison, ACTIONS_DOIGT.appui, 0, 0);
+  majInclinaison(); vibrer(8);
 });
 const lacherPad = () => {
   if (!incl.maintenu) return;
-  incl.maintenu = false; zoneXY.classList.remove('active'); pilote.maj('inclinaison', { x: 0, y: 0 });
+  incl.maintenu = false; zoneXY.classList.remove('active');
+  pilote.definirContact('inclinaison', false);
+  journal.noterDoigt(performance.now(), SOURCES_DOIGT.inclinaison, ACTIONS_DOIGT.relache, 0, 0);
+  pilote.maj('inclinaison', { x: 0, y: 0 });
 };
 zoneXY.addEventListener('pointerup', lacherPad);
 zoneXY.addEventListener('pointercancel', lacherPad);
@@ -963,7 +1130,12 @@ window.addEventListener('keydown', (ev) => {
 // Quand l'application passe en arrière-plan, on lâche tout : le rover s'arrête.
 document.addEventListener('visibilitychange', () => {
   majVerrouEcran();
-  if (document.hidden) { pilote.toutArreter(); manetteXY.relacher(); manetteRot.relacher(); if (S.transport?.connecte && !S.urgence.actif) S.transport.envoyer(encoderStop()); }
+  journal.noterVisibilite(performance.now(), !document.hidden);
+  if (document.hidden) {
+    pilote.toutArreter(); manetteXY.relacher(); manetteRot.relacher();
+    if (S.transport?.connecte && !S.urgence.actif) S.transport.envoyer(encoderStop());
+    stockageJournal.sauvegarder();
+  }
 });
 
 // -- Sécurités obstacles : interrupteur (param reflexe + param carte_on), état lu sur le rover --
@@ -990,6 +1162,17 @@ function majSecurites() {
       ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
       : "MODE RADIOCOMMANDE : sécurités coupées, aucun freinage devant un mur");
   }
+  const swRef = $('#sw-reflexe');
+  const valReflexe = connecte ? reglages.params.get('reflexe')?.valeur : undefined;
+  const refDispo = typeof valReflexe === 'number';
+  const refActif = !refDispo || valReflexe >= 0.5;
+  swRef.setAttribute('aria-checked', String(refActif));
+  swRef.disabled = !connecte || !refDispo;
+  poserTexte($('#reflexe-aide'), !connecte || !refDispo
+    ? 'En attente du rover (paramètre reflexe)… Coupé, le rover ne freine plus tout seul devant un obstacle.'
+    : refActif
+      ? 'Actif : le rover ralentit et s’arrête devant un obstacle vu par le sonar. Coupé, il ne freine plus tout seul devant un obstacle.'
+      : 'Coupé : le rover ne freine plus tout seul devant un obstacle.');
 }
 
 /** Un paramètre arrive du rover : on s'en sert pour afficher l'état réel, et pour la remise en service à la connexion. */
@@ -1023,6 +1206,14 @@ function basculerSecurites(actives) {
 }
 $('#sw-securites').addEventListener('click', () => basculerSecurites($('#sw-securites').getAttribute('aria-checked') !== 'true'));
 $('#btn-securites-remettre').addEventListener('click', () => basculerSecurites(true));
+$('#sw-reflexe').addEventListener('click', () => {
+  if (!S.transport?.connecte) return;
+  const actif = $('#sw-reflexe').getAttribute('aria-checked') !== 'true';
+  S.verifSecurites = false;
+  envoyerTexte(`param reflexe ${actif ? 1 : 0}`, { silencieux: true });
+  setTimeout(() => envoyerTexte('params', { silencieux: true }), 250);
+  vibrer(actif ? 15 : [35, 35, 35]);
+});
 majSecurites();
 
 // -- Patrouille par points : on touche jusqu'à 6 points sur la carte, numérotés, puis « Lancer » --

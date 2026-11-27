@@ -22,6 +22,7 @@ const ICONES = {
   reglages: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   partage: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h3v3h-3zM19 14h1M14 19h1M17.5 19.5H20M20 17v.01"/>',
   journal: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.8" cy="6" r="1"/><circle cx="4.8" cy="12" r="1"/><circle cx="4.8" cy="18" r="1"/>',
+  marquer: '<path d="M5 4v16"/><path d="M5 5h11l-2 4 2 4H5"/>',
   // --- liaison ---
   bluetooth: '<path d="M7 7.5l10 9-5 4.5V3l5 4.5-10 9"/>',
   reseau: '<path d="M10 14l4-4"/><path d="M8.5 12.5l-2 2a3.2 3.2 0 0 0 4.5 4.5l2-2"/><path d="M15.5 11.5l2-2A3.2 3.2 0 0 0 13 5l-2 2"/>',

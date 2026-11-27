@@ -140,6 +140,8 @@
         </div>
       </div>
 
+      <button type="button" id="btn-marquer" class="btn-marquer" aria-label="Marquer une hésitation dans le journal" title="Poser un repère « j'ai senti une hésitation ici »"><span class="ico-slot" data-icone="marquer"></span><span>Marquer</span></button>
+
       <!-- Les zones captent le pouce n'importe où : la manette apparaît là où l'on pose le doigt. -->
       <div class="deck">
         <div class="zone zone-xy" id="zone-xy">
@@ -328,6 +330,14 @@
         </label>
         <p class="aide">Règle la vitesse maximale et la rotation du rover (comme pour une voiture radiocommandée). Plus fin : cherchez <em>v_max</em>, <em>v_rapide</em>, <em>w_max</em> et <em>v_aveugle_man</em> (vitesse maximale vers un côté que la tête ne regarde pas, sécurités actives) dans les paramètres plus bas.</p>
 
+        <h2>Assistance au pilotage</h2>
+        <div class="interrupteurs">
+          <button type="button" class="interrupteur" role="switch" aria-checked="true" id="sw-reflexe" disabled>
+            <span>Ralentir près des obstacles</span><i></i>
+          </button>
+        </div>
+        <p class="aide" id="reflexe-aide">En attente du rover (paramètre <code>reflexe</code>)… Coupé, le rover ne freine plus tout seul devant un obstacle.</p>
+
         <h2>Semi-veille</h2>
         <p class="aide">Quand rien ne se passe, le rover met la tête et les moteurs au repos pour économiser la batterie ; il se réveille tout seul à la moindre commande. Choisissez au bout de combien de temps (0 = jamais).</p>
         <div class="seg large" id="seg-veille" role="group" aria-label="Délai avant la semi-veille">
@@ -468,10 +478,21 @@
   <!-- ===== Journal ===== -->
   <dialog id="dlg-journal" class="feuille" aria-labelledby="jr-titre">
     <div class="feuille-tete">
-      <h2 id="jr-titre">Journal</h2>
+      <h2 id="jr-titre">Journal de séance</h2>
       <button type="button" class="bouton" id="jr-effacer">Effacer</button>
       <button type="button" class="btn-icone" id="jr-fermer" aria-label="Fermer"></button>
     </div>
+    <div class="rangee-boutons jr-actions">
+      <button type="button" class="bouton plein" id="jr-exporter">Enregistrer le fichier</button>
+      <button type="button" class="bouton" id="jr-partager" hidden>Partager</button>
+      <button type="button" class="bouton" id="jr-demo" hidden>Simuler un incident</button>
+    </div>
+    <p class="aide jr-stats chiffres" id="jr-stats"></p>
+    <h3 class="jr-sous">Résumé automatique</h3>
+    <ul id="jr-resume" class="journal"></ul>
+    <h3 class="jr-sous">Repères (« Marquer »)</h3>
+    <ul id="jr-reperes" class="journal"></ul>
+    <h3 class="jr-sous">Événements</h3>
     <ul id="journal-liste" class="journal"></ul>
     <p class="etat-vide" id="journal-vide">Rien à signaler pour l'instant.</p>
   </dialog>

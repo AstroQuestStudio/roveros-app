@@ -38,6 +38,8 @@ export class Transport extends EventTarget {
     this.echecs = 0; // écritures consécutives en échec
     this.jetees = 0; // trames remplacées ou périmées avant d'avoir été écrites
     this.fileMax = 0; // plus grande longueur atteinte par la file
+    this.surEnvoi = null; // (trame, tDebut) => handle optionnel pour le journal
+    this.surFinEcriture = null; // (handle, ok, dureeMs) => void
   }
 
   get connecte() { return this.etat === 'connecte'; }
@@ -79,7 +81,12 @@ export class Transport extends EventTarget {
     }
     const element = { trame, cle, tentatives: 0, t: performance.now() };
     if (priorite) this._file.unshift(element);
-    else this._file.push(element);
+    else if (type === T.MANETTE) {
+      // Les consignes de pilotage passent avant les textes/pings en attente (mais après STOP/URGENCE).
+      const apresVital = this._file.findIndex((e) => e.trame[0] !== T.URGENCE && e.trame[0] !== T.STOP);
+      if (apresVital < 0) this._file.push(element);
+      else this._file.splice(apresVital, 0, element);
+    } else this._file.push(element);
     // File trop longue (liaison lente) : on abandonne les plus anciennes, sauf les prioritaires.
     while (this._file.length > TAILLE_MAX_FILE) {
       const i = this._file.findIndex((e) => e.trame[0] !== T.URGENCE && e.trame[0] !== T.STOP);
@@ -102,7 +109,7 @@ export class Transport extends EventTarget {
   _pomper() {
     if (this._minuterie !== null || this._ecritureEnCours || this._file.length === 0) return;
     const attente = Math.max(0, this._dernierEnvoi + INTERVALLE_MIN_MS - performance.now());
-    this._minuterie = setTimeout(async () => {
+    const lancer = async () => {
       this._minuterie = null;
       if (this._ecritureEnCours) return; // l'écriture en cours relancera la pompe en finissant
       const element = this._file.shift();
@@ -112,8 +119,10 @@ export class Transport extends EventTarget {
         this._pomper();
         return;
       }
-      this._dernierEnvoi = performance.now();
+      const t0 = performance.now();
+      this._dernierEnvoi = t0;
       this._ecritureEnCours = true;
+      const idJournal = this.surEnvoi ? this.surEnvoi(element.trame, t0) : -1;
       try {
         let garde;
         try {
@@ -123,10 +132,12 @@ export class Transport extends EventTarget {
           ]);
         } finally { clearTimeout(garde); }
         this.envoyees++;
+        if (idJournal >= 0 && this.surFinEcriture) this.surFinEcriture(idJournal, true, performance.now() - t0);
         if (this.echecs >= 5) this.dispatchEvent(new CustomEvent('ecriture', { detail: { ok: true } })); // les ordres repartent
         this.echecs = 0;
       } catch (erreur) {
         this.echecs++;
+        if (idJournal >= 0 && this.surFinEcriture) this.surFinEcriture(idJournal, false, performance.now() - t0);
         if (this.echecs === 5) this.dispatchEvent(new CustomEvent('ecriture', { detail: { ok: false } })); // 5 écritures de suite en échec : on le dit
         // Un ordre vital (urgence, stop) est retenté ; le reste est abandonné (le suivant arrive vite).
         const vital = element.trame[0] === T.URGENCE || element.trame[0] === T.STOP;
@@ -138,7 +149,13 @@ export class Transport extends EventTarget {
       }
       this._ecritureEnCours = false;
       this._pomper();
-    }, attente);
+    };
+    if (attente > 0) this._minuterie = setTimeout(lancer, attente);
+    else {
+      // Après une écriture lente (> 41 ms), on enchaîne sans subir les 4–15 ms d'un setTimeout(0).
+      this._minuterie = 0;
+      queueMicrotask(lancer);
+    }
   }
 
   /** À redéfinir : écrit réellement une trame sur la liaison. */
