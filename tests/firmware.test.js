@@ -216,7 +216,7 @@ function creerFauxRover(firmware) {
   return { rover, textes, bruts };
 }
 
-test('faux rover : joue le firmware Rust (info, modes, materiel+acquisition, sauver/usine, nom, écho 0x12)', () => {
+test('faux rover : joue le firmware Rust complet (info, modes, materiel+acquisition+liaison, sauver/usine, nom, maj, écho 0x12)', () => {
   const { rover, textes, bruts } = creerFauxRover('rust');
   rover.accueillir();
 
@@ -224,11 +224,16 @@ test('faux rover : joue le firmware Rust (info, modes, materiel+acquisition, sau
   const ligneModes = textes.find((t) => t.startsWith('modes '));
   assert.match(ligneInfo, /version=rust100-0\.1/);
   assert.match(ligneInfo, /nom=LODILABIDON/);
-  assert.equal(ligneModes, 'modes manuel');
+  // rust100/src/systeme.rs:446
+  assert.equal(ligneModes, 'modes manuel aller course explorer base patrouille chien calibrer autotest');
 
   rover.recevoir(encoderTexte('materiel'));
-  assert.ok(textes.some((t) => t.startsWith('materiel ') && t.includes('pile0=6388') && t.includes('code_ram=55252')));
-  assert.ok(textes.some((t) => t === 'acquisition bus=0 bus_max=0 age=3972'));
+  assert.ok(textes.some((t) => t.startsWith('materiel ') && t.includes('pile0=6388') && t.includes('code_ram=55252') && t.includes('raz=tension')));
+  assert.ok(textes.some((t) => t.startsWith('acquisition bus=0 bus_max=0 age=') && t.includes('abrt0=0')));
+  assert.ok(textes.some((t) => t.startsWith('nav pas_us=')));
+
+  rover.recevoir(encoderTexte('liaison'));
+  assert.ok(textes.some((t) => t.startsWith('liaison m=') && t.includes('pertes=') && t.includes('mtu=')));
 
   // params sauver (inchangés -> modifiés -> en mouvement)
   rover.recevoir(encoderTexte('params sauver'));
@@ -242,22 +247,32 @@ test('faux rover : joue le firmware Rust (info, modes, materiel+acquisition, sau
   rover.pas(0.1);
   rover.recevoir(encoderTexte('params sauver'));
   assert.ok(textes.includes('err params : rover en mouvement'));
+  rover.recevoir(encoderTexte('mode arret'));
+  rover.pas(0.5);
 
   // usine
   rover.recevoir(encoderTexte('params usine'));
   assert.ok(textes.includes("evt paramètres d'usine restaurés"));
   assert.equal(rover.params.v_max.v, 0.5);
 
-  // nom + maj indisponible + echo 0x12 -> 0x92
+  // nom + maj état (rust100/src/systeme.rs:278,844) + echo 0x12 -> 0x92
   rover.recevoir(encoderTexte('nom MONROVER'));
   assert.ok(textes.includes('evt nom enregistré : MONROVER (au prochain démarrage)'));
   rover.recevoir(encoderTexte('nom -'));
-  assert.ok(textes.includes('evt nom enregistré : LODILABIDON (au prochain démarrage)'));
+  assert.ok(textes.includes("evt nom d'origine au prochain démarrage"));
   rover.recevoir(encoderTexte('maj'));
-  assert.ok(textes.includes('err mise à jour sans fil : indisponible'));
+  assert.ok(textes.some((t) => /^maj etat=0 taille=\d+ crc=[0-9a-f]{8}$/.test(t)));
 
   rover.recevoir(encoderEcho(Uint8Array.of(9, 77)));
   assert.ok(bruts.some((m) => m?.type === 'echo' && m.donnees[0] === 9 && m.donnees[1] === 77));
+});
+
+test('faux rover : joue aussi l\'ancien firmware Rust minimal (manette seule, sans MAJ)', () => {
+  const { rover, textes } = creerFauxRover('rust-ancien');
+  rover.accueillir();
+  assert.equal(textes.find((t) => t.startsWith('modes ')), 'modes manuel');
+  rover.recevoir(encoderTexte('maj'));
+  assert.ok(textes.includes('err mise à jour sans fil : indisponible'));
 });
 
 test('faux rover : joue le firmware MicroPython (info, modes, materiel, nom, profil)', () => {

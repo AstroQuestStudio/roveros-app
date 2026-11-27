@@ -16,12 +16,18 @@ export class TransportDemo extends Transport {
     this.firmware = firmware;
     this.rover = null;
     this._horloge = null;
+    this._accueilTimer = null;
+    this._trouTimer = null;
+    this._redemTimer = null;
     this._dernier = 0;
     this._trouJusqua = 0;
     this._trouFait = false;
   }
 
   async connecter() {
+    clearTimeout(this._accueilTimer);
+    clearTimeout(this._trouTimer);
+    clearTimeout(this._redemTimer);
     this._changerEtat('connexion', 'Démarrage du rover simulé…');
     this.rover = new FauxRover({
       monde: this.monde,
@@ -34,6 +40,7 @@ export class TransportDemo extends Transport {
         this._recevoir(trame);
       }),
       planifier: (fn, ms) => setTimeout(() => { if (this.etat === 'connecte') fn(); }, ms),
+      surRedemarrage: (info) => this._simulerRedemarrage(info),
     });
     this._dernier = performance.now();
     this._trouJusqua = 0;
@@ -41,9 +48,9 @@ export class TransportDemo extends Transport {
     this._horloge = setInterval(() => this._avancer(), PAS_MS);
     const nom = this.firmware === 'rust' ? 'Démo Rust' : this.firmware === 'micropython' ? 'Démo MicroPython' : 'Rover simulé';
     this._changerEtat('connecte', nom);
-    setTimeout(() => this.rover?.accueillir(), 120);
+    this._accueilTimer = setTimeout(() => this.rover?.accueillir(), 120);
     // À 2,2 s : simule un trou de liaison de 380 ms pour que le diagnostic de liaison soit visible.
-    setTimeout(() => {
+    this._trouTimer = setTimeout(() => {
       if (this.etat === 'connecte' && !this._trouFait) {
         this._trouFait = true;
         this._trouJusqua = performance.now() + 380;
@@ -62,9 +69,60 @@ export class TransportDemo extends Transport {
 
   async deconnecter() {
     clearInterval(this._horloge);
+    clearTimeout(this._accueilTimer);
+    clearTimeout(this._trouTimer);
+    clearTimeout(this._redemTimer);
     this._horloge = null;
     this.rover = null;
     this._changerEtat('deconnecte');
+  }
+
+  _simulerRedemarrage({ pourMaj = false, entete = null } = {}) {
+    if (this.etat !== 'connecte' || !this.rover) return;
+    const precedent = this.rover;
+    clearInterval(this._horloge);
+    clearTimeout(this._accueilTimer);
+    clearTimeout(this._trouTimer);
+    clearTimeout(this._redemTimer);
+    this._horloge = null;
+    this._changerEtat('reconnexion', pourMaj ? 'Installation et redémarrage…' : 'Redémarrage du rover…');
+    this._redemTimer = setTimeout(() => {
+      const majInfo = { ...precedent.majInfo };
+      if (pourMaj && entete) {
+        if (precedent.simulerRetourArriere) {
+          majInfo.etat = 3;
+          majInfo.raz = 'garde';
+        } else {
+          majInfo.etat = 0;
+          majInfo.taille = entete.tailleBrute;
+          majInfo.crc = entete.crcBrut;
+          majInfo.raz = 'voulu';
+        }
+      } else {
+        majInfo.raz = 'voulu';
+      }
+      this.rover = new FauxRover({
+        monde: this.monde,
+        firmware: precedent.rustAncien ? 'rust-ancien' : this.firmware,
+        fenetre: this.monde === 'couloir',
+        raz: majInfo.raz,
+        simulerRetourArriere: precedent.simulerRetourArriere,
+        sortie: (trame) => queueMicrotask(() => {
+          if (this.etat !== 'connecte') return;
+          if (performance.now() < this._trouJusqua) return;
+          this._recevoir(trame);
+        }),
+        planifier: (fn, ms) => setTimeout(() => { if (this.etat === 'connecte') fn(); }, ms),
+        surRedemarrage: (info) => this._simulerRedemarrage(info),
+      });
+      this.rover.majInfo = majInfo;
+      this.rover.nom = precedent.nom;
+      this._dernier = performance.now();
+      this._horloge = setInterval(() => this._avancer(), PAS_MS);
+      const nom = this.firmware === 'rust' ? 'Démo Rust' : this.firmware === 'micropython' ? 'Démo MicroPython' : 'Rover simulé';
+      this._changerEtat('connecte', nom);
+      this._accueilTimer = setTimeout(() => this.rover?.accueillir(), 120);
+    }, 550);
   }
 
   async _ecrire(trame) {

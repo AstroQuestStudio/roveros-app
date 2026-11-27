@@ -16,12 +16,17 @@
 
 import {
   assemblerDrapeaux, decoderOrdre, encoderCarte, encoderChemin, encoderEtat, encoderPoints, encoderOrigine,
-  encoderPong, encoderEchoRetour, encoderTexteRover, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
+  encoderPong, encoderEchoRetour, encoderTexteRover, encoderMajRetour, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
 } from './protocole.js';
 import { RAYON_CIRCONSCRIT, LARGEUR_ROVER, positionSonar } from './gabarit.js';
+import {
+  ETATS_MAJ, ERREURS_IMAGE, crc32, lireEnteteMaj, TAILLE_ENTETE_MAJ,
+} from './maj.js';
 
 export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'patrouille', 'arret'];
-export const MODES_RUST = ['manuel'];
+// rust100/src/systeme.rs:446
+export const MODES_RUST = ['manuel', 'aller', 'course', 'explorer', 'base', 'patrouille', 'chien', 'calibrer', 'autotest'];
+export const MODES_RUST_ANCIEN = ['manuel'];
 export const MODES_MICROPYTHON = ['manuel', 'base', 'autotest', 'calibrer', 'chien', 'danse', 'explorer', 'glisse', 'aller', 'slalom', 'mur', 'carre', 'patrouille', 'course'];
 
 const CELLULE = 0.06; // taille d'une case de la carte, en mètres (la carte couvre ±1,92 m)
@@ -141,15 +146,27 @@ export class FauxRover {
    *   planifier(fn, ms)   exécute fn après ms (pour simuler le délai du PONG) ; par défaut, tout de suite
    *   alea()              générateur de nombres entre 0 et 1 (Math.random par défaut)
    */
-  constructor({ sortie, planifier = (fn) => fn(), alea = Math.random, fenetre = false, monde = 'salle', firmware = 'demo' } = {}) {
+  constructor({
+    sortie, planifier = (fn) => fn(), alea = Math.random, fenetre = false, monde = 'salle', firmware = 'demo',
+    surRedemarrage = null, raz = 'tension', simulerRetourArriere = false,
+  } = {}) {
     this.sortie = sortie;
     this.planifier = planifier;
     this.alea = alea;
-    this.firmware = firmware;
-    this.nomOrigine = firmware === 'rust' ? 'LODILABIDON' : firmware === 'micropython' ? 'Rover-4538' : 'Rover-DEMO';
+    this.rustAncien = firmware === 'rust-ancien';
+    this.firmware = this.rustAncien ? 'rust' : firmware;
+    this.surRedemarrage = surRedemarrage;
+    this.simulerRetourArriere = simulerRetourArriere;
+    this.nomOrigine = this.firmware === 'rust' ? 'LODILABIDON' : this.firmware === 'micropython' ? 'Rover-4538' : 'Rover-DEMO';
     this.nom = this.nomOrigine;
-    this.version = firmware === 'rust' ? 'rust100-0.1' : firmware === 'micropython' ? '0.1.1' : 'demo-1.0';
-    this.modes = firmware === 'rust' ? [...MODES_RUST] : firmware === 'micropython' ? [...MODES_MICROPYTHON] : [...MODES];
+    this.version = this.firmware === 'rust' ? 'rust100-0.1' : this.firmware === 'micropython' ? '0.1.1' : 'demo-1.0';
+    this.modes = this.rustAncien
+      ? [...MODES_RUST_ANCIEN]
+      : this.firmware === 'rust'
+        ? [...MODES_RUST]
+        : this.firmware === 'micropython'
+          ? [...MODES_MICROPYTHON]
+          : [...MODES];
     this.params = {};
     for (const [nom, [v, min, max]] of Object.entries(DEFAUTS)) this.params[nom] = { v, min, max };
     this._paramsModifies = false;
@@ -193,6 +210,29 @@ export class FauxRover {
     this.frein = 0;
     this.aLim = 1.5;
     this.cycles = 0;
+    this.zoneM = 0;
+    this.verdictAutotest = [];
+    // État matériel, bus et mise à jour sans fil pour Rust complet (rust100/src/maj.rs, acquisition.rs, liaison/diagnostic.rs)
+    this.carteCible = 'PicoW-R100-AB';
+    this.majInfo = { etat: 0, taille: 590728, crc: 0x1234abcd, raz: String(raz || 'tension'), marcheS: null };
+    this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+    this.busDiag = [
+      { abrt: 0, lig: '11', tentatives: 0, reprises: 0, echeances: 0, actifs: 0 },
+      { abrt: 0, lig: '11', tentatives: 0, reprises: 0, echeances: 0, actifs: 0 },
+    ];
+    this.liaisonDiag = {
+      recus: [0, 0, 0, 0, 0, 0, 0, 0, 0], // m, s, u, a, t, p, e, maj, autre
+      pertes: 0, rxerr: 0, txpleins: 0, file: 0, ecartMs: 0, ordreUs: 0, silence: 0,
+      conn: 1, deconn: 0, raison: 0, intUs: 15000, lat: 0, supMs: 4000, mtu: 247,
+      veille: 0, pris: 0, paramFile: 0, paramMaj: 0, paramInit: 0, paramRep: 0,
+    };
+    this.journalEmbarque = this.firmware === 'rust' && !this.rustAncien
+      ? [
+        { tMs: 250, nom: 'boot', valeurs: `raz=${this.majInfo.raz}` },
+        { tMs: 1200, nom: 'imu', valeurs: 'biais=-51.0 ok=1' },
+      ]
+      : [];
+    this.journalPerdus = 0;
   }
 
   // ===== Fenêtre de carte =====
@@ -240,6 +280,8 @@ export class FauxRover {
     let ordre = null;
     try { ordre = decoderOrdre(trame); } catch { /* trame illisible : ignorée */ }
     if (!ordre) return;
+    const idxRecu = { manette: 0, stop: 1, urgence: 2, aller: 3, texte: 4, ping: 5, echo: 6, maj_debut: 7, maj_bloc: 7, maj_fin: 7, maj_installer: 7 }[ordre.type] ?? 8;
+    this.liaisonDiag.recus[idxRecu]++;
     switch (ordre.type) {
       case 'ping': this.planifier(() => this.sortie(encoderPong(ordre.n)), 15 + this.alea() * 25); return;
       case 'echo':
@@ -250,6 +292,12 @@ export class FauxRover {
         if (ordre.actif) this.annuler();
         return;
       case 'stop': this.annuler(); return;
+      case 'maj_debut':
+      case 'maj_bloc':
+      case 'maj_fin':
+      case 'maj_installer':
+        this._traiterMaj(ordre);
+        return;
       default: break;
     }
     if (this.urgence) { this.err("arrêt d'urgence actif : ordre refusé"); return; }
@@ -262,12 +310,155 @@ export class FauxRover {
         this.garde = false;
         break;
       case 'aller': {
+        if (this.firmware === 'rust') {
+          // rust100/src/systeme.rs:605-609 : Recu::Aller renvoie « err mode indisponible »
+          this.err('mode indisponible');
+          break;
+        }
         const c = this.fenetre ? this.centreFenetre() : { x: 0, y: 0 }; // ALLER est relatif au centre de la fenêtre
         this.allerA(c.x + ordre.x / 1000, c.y + ordre.y / 1000);
         break;
       }
       case 'texte': this.commande(ordre.texte); break;
       default: break;
+    }
+  }
+
+  _enMouvementPhysique() {
+    return this.mode !== 'manuel' || Math.hypot(this.vxb, this.vyb) > 0.02 || Math.abs(this.w) > 0.05;
+  }
+
+  _noterJournal(nom, valeurs) {
+    if (this.firmware !== 'rust' || this.rustAncien) return;
+    if (this.journalEmbarque.length >= 160) {
+      this.journalEmbarque.shift();
+      this.journalPerdus++;
+    }
+    this.journalEmbarque.push({ tMs: Math.round(this.t * 1000), nom, valeurs });
+  }
+
+  _traiterMaj(ordre) {
+    if (this.rustAncien || this.firmware === 'demo') {
+      this.sortie(encoderMajRetour(ETATS_MAJ.E_ABSENT, 0));
+      this.err('mise à jour sans fil : indisponible');
+      return;
+    }
+    const enMvt = this._enMouvementPhysique();
+    if (!enMvt && (ordre.type === 'maj_debut' || ordre.type === 'maj_installer')) {
+      this.annuler();
+    }
+    const s = this.majSession;
+    if (ordre.type === 'maj_debut') {
+      if (s.etat === 'installe') { this.sortie(encoderMajRetour(ETATS_MAJ.INSTALLE, s.taille)); return; }
+      if (s.etat === 'pret' && ordre.taille === s.taille && ordre.crc === s.crc) {
+        this.sortie(encoderMajRetour(ETATS_MAJ.PRET, s.taille));
+        return;
+      }
+      if (enMvt) {
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_IMAGE, 8)); // ERR_MOUVEMENT
+        this.err('mise à jour : rover en mouvement');
+        return;
+      }
+      const maxPaquet = TAILLE_ENTETE_MAJ + 960 * 1024;
+      if (ordre.taille < TAILLE_ENTETE_MAJ + (this.firmware === 'rust' ? 512 : 65) || ordre.taille > maxPaquet) {
+        this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_TAILLE, maxPaquet));
+        return;
+      }
+      if (!(s.etat === 'reception' && s.taille === ordre.taille && s.crc === ordre.crc)) {
+        this.majSession = {
+          etat: 'reception',
+          taille: ordre.taille,
+          crc: ordre.crc,
+          attendu: 0,
+          tampon: new Uint8Array(ordre.taille),
+          ecarts: 0,
+        };
+      }
+      this.sortie(encoderMajRetour(ETATS_MAJ.RECEPTION, this.majSession.attendu));
+      return;
+    }
+    if (ordre.type === 'maj_bloc') {
+      if (s.etat !== 'reception') return;
+      if (ordre.position !== s.attendu) {
+        s.ecarts++;
+        if (s.ecarts % 16 === 1) this.sortie(encoderMajRetour(ETATS_MAJ.DESORDRE, s.attendu));
+        return;
+      }
+      s.ecarts = 0;
+      const fin = s.attendu + ordre.donnees.length;
+      if (fin > s.taille) {
+        this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_TAILLE, s.taille));
+        return;
+      }
+      const avantSecteur = Math.floor(Math.max(0, s.attendu - TAILLE_ENTETE_MAJ) / 4096);
+      s.tampon.set(ordre.donnees, s.attendu);
+      s.attendu = fin;
+      if (s.attendu >= TAILLE_ENTETE_MAJ) {
+        // Vérification immédiate dès réception des 64 octets d'en-tête (rust100/liaison/src/maj.rs:345-360)
+        try {
+          if (s.attendu - ordre.donnees.length < TAILLE_ENTETE_MAJ) {
+            const enteteSeul = s.tampon.subarray(0, TAILLE_ENTETE_MAJ);
+            const vue = new DataView(enteteSeul.buffer, enteteSeul.byteOffset, 64);
+            if (vue.getUint32(0, true) !== 0x4A4D5652) throw 1;
+            const ver = vue.getUint32(4, true);
+            if ((this.firmware === 'rust' && ver !== 2) || (this.firmware === 'micropython' && ver !== 1)) throw 2;
+            if (crc32(enteteSeul.subarray(0, 48)) !== vue.getUint32(48, true)) throw 3;
+            const carteChamp = enteteSeul.subarray(24, 48);
+            const nul = carteChamp.indexOf(0);
+            const carte = new TextDecoder().decode(nul >= 0 ? carteChamp.subarray(0, nul) : carteChamp);
+            const attendue = this.firmware === 'rust' ? this.carteCible : 'Raspberry Pi Pico W';
+            if (carte !== attendue) throw 4;
+          }
+        } catch (code) {
+          const c = typeof code === 'number' ? code : 1;
+          this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+          this.sortie(encoderMajRetour(ETATS_MAJ.E_IMAGE, c));
+          return;
+        }
+      }
+      const apresSecteur = Math.floor(Math.max(0, s.attendu - TAILLE_ENTETE_MAJ) / 4096);
+      if (apresSecteur > avantSecteur || s.attendu === s.taille) {
+        this.sortie(encoderMajRetour(ETATS_MAJ.RECEPTION, s.attendu));
+      }
+      return;
+    }
+    if (ordre.type === 'maj_fin') {
+      if (s.etat === 'pret') { this.sortie(encoderMajRetour(ETATS_MAJ.PRET, s.taille)); return; }
+      if (s.etat !== 'reception') { this.sortie(encoderMajRetour(ETATS_MAJ.E_ABSENT, 0)); return; }
+      if (s.attendu !== s.taille) { this.sortie(encoderMajRetour(ETATS_MAJ.RECEPTION, s.attendu)); return; }
+      if (crc32(s.tampon) !== s.crc) {
+        this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_CRC, 0));
+        return;
+      }
+      try {
+        lireEnteteMaj(s.tampon);
+      } catch {
+        this.majSession = { etat: 'absent', taille: 0, crc: 0, attendu: 0, tampon: null, ecarts: 0 };
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_IMAGE, 6));
+        return;
+      }
+      s.etat = 'pret';
+      this.sortie(encoderMajRetour(ETATS_MAJ.PRET, s.taille));
+      return;
+    }
+    if (ordre.type === 'maj_installer') {
+      if (s.etat !== 'pret' || ordre.crc !== s.crc) {
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_ABSENT, 0));
+        return;
+      }
+      if (enMvt) {
+        this.sortie(encoderMajRetour(ETATS_MAJ.E_IMAGE, 8));
+        this.err('mise à jour : rover en mouvement');
+        return;
+      }
+      const h = lireEnteteMaj(s.tampon);
+      s.etat = 'installe';
+      this.sortie(encoderMajRetour(ETATS_MAJ.INSTALLE, s.taille));
+      this.evt('mise à jour : installation, redémarrage');
+      this.planifier(() => this.surRedemarrage?.({ pourMaj: true, entete: h }), 40);
     }
   }
 
@@ -311,36 +502,69 @@ export class FauxRover {
         break;
       case 'nom': {
         if (this.firmware !== 'rust' && this.firmware !== 'micropython') { this.err('commande inconnue : nom'); break; }
-        if (args.length === 1 && args[0] === '-') {
+        if (args.length !== 1) { this.err('nom : un seul nom attendu'); break; }
+        if (this.firmware === 'rust' && this._enMouvementPhysique()) { this.err('nom : rover en mouvement'); break; }
+        if (args[0] === '-') {
           this.nom = this.nomOrigine;
-          this.evt(`nom enregistré : ${this.nomOrigine} (au prochain démarrage)`);
-        } else if (args.length === 1 && /^[\x21-\x7e]{1,20}$/.test(args[0])) {
+          // rust100/src/systeme.rs:278 ; rover/roveros/systeme.py:228
+          this.evt("nom d'origine au prochain démarrage");
+        } else if (/^[\x21-\x7e]{1,20}$/.test(args[0])) {
           this.nom = args[0];
+          // rust100/src/systeme.rs:288
           this.evt(`nom enregistré : ${this.nom} (au prochain démarrage)`);
         } else {
-          this.err('nom invalide (20 caractères ASCII sans espace, ou -)');
+          this.err('nom : invalide (20 caractères ASCII maximum)');
         }
         break;
       }
       case 'maj':
-        if (this.firmware === 'micropython') this.evt('mise à jour sans fil prête (trames 0x20 à 0x23)');
-        else this.err('mise à jour sans fil : indisponible');
+        if (this.firmware === 'rust' && this.rustAncien) {
+          this.err('mise à jour sans fil : indisponible');
+        } else if (this.firmware === 'rust' || this.firmware === 'micropython') {
+          // rust100/src/systeme.rs:844 ; rover/roveros/systeme.py:316
+          const crcHex = (this.majInfo.crc >>> 0).toString(16).padStart(8, '0');
+          this.texte(`maj etat=${this.majInfo.etat} taille=${this.majInfo.taille} crc=${crcHex}`);
+        } else {
+          this.err('mise à jour sans fil : indisponible');
+        }
         break;
-      case 'recaler': this.recaler(); break;
+      case 'recaler':
+        this.recaler();
+        break;
       case 'carte':
-        if (args[0] === 'raz') { this.carte.fill(0); this.renvoyerTout(); this.evt('carte effacée'); } else this.err('commande carte inconnue');
+        if (args[0] === 'raz') {
+          this.carte.fill(0); this.renvoyerTout();
+          if (this.firmware !== 'rust') this.evt('carte effacée'); // rust100/src/systeme.rs:758-761
+        } else {
+          this.err('commande carte inconnue');
+        }
         break;
       case 'radar':
-        if (['arret', 'auto', 'balayage', 'fixe', 'suivi'].includes(args[0])) { this.radar = args[0]; this.evt(`radar : ${args[0]}`); } else this.err('mode radar inconnu');
+        if (['arret', 'auto', 'balayage', 'fixe', 'suivi'].includes(args[0])) {
+          this.radar = args[0];
+          if (this.firmware !== 'rust') this.evt(`radar : ${args[0]}`); // rust100/src/systeme.rs:776
+        } else {
+          this.err(this.firmware === 'rust' ? 'radar : mode inconnu' : 'mode radar inconnu');
+        }
         break;
       case 'vitesse': {
         const v = Number(args[0]);
-        if (Number.isFinite(v)) this.vitessePct = limiter(v, 10, 100); else this.err('vitesse invalide');
+        if (Number.isFinite(v)) this.vitessePct = limiter(v, 10, 100);
+        else this.err(this.firmware === 'rust' ? 'vitesse : nombre attendu' : 'vitesse invalide');
+        break;
+      }
+      case 'zone': {
+        const r = Number(args[0]);
+        if (args.length !== 1 || !Number.isFinite(r)) { this.err('zone : nombre attendu'); break; }
+        this.zoneM = Math.max(0, r);
+        if (this.zoneM > 0) this.evt(`zone de ${Math.round(this.zoneM * 100)} cm autour d'ici`); // rust100/src/systeme.rs:791
+        else this.evt('zone supprimée'); // rust100/src/systeme.rs:794
         break;
       }
       case 'infos': this.envoyerInfos(); break;
       case 'champ': {
         const disponibles = {
+          t: Math.round(this.t * 1000) / 1000,
           plafond: this.plafond,
           frein: this.frein,
           tension: Math.round(this.tension * 100) / 100,
@@ -353,6 +577,7 @@ export class FauxRover {
           sonar: this.dernierEcho / 100,
           d_libre: this.libreCm === 255 ? -1 : this.libreCm / 100,
           retards: 0,
+          pris: 0,
         };
         const noms = args.slice(0, 5);
         if (noms.length === 0) { this.err('champ : au moins un nom attendu'); break; }
@@ -363,17 +588,60 @@ export class FauxRover {
       }
       case 'veille': {
         const v = Number(args[0]);
-        if (Number.isFinite(v) && v >= 0) { this.veilleS = v; this.evt(v > 0 ? `veille après ${v} s` : 'veille désactivée'); } else this.err('veille : nombre de secondes attendu');
+        if (Number.isFinite(v) && v >= 0) {
+          this.veilleS = v;
+          if (this.firmware === 'rust') {
+            this.evt(v > 0 ? `veille après ${Math.round(v)} s sans ordre` : 'veille désactivée'); // rust100/src/systeme.rs:829,832
+          } else {
+            this.evt(v > 0 ? `veille après ${v} s` : 'veille désactivée');
+          }
+        } else this.err('veille : nombre de secondes attendu');
         break;
       }
       case 'materiel':
         if (this.firmware === 'rust') {
-          this.texte(`materiel cycles=${73120 + Math.round(this.t * 100)} calcul=240 calcul_max=328 duree_max=340 retards=0 err_driver=0 err_centrale=0 mem=148400 pile0=6388 pile1=1756 code_ram=55252 bus_max=0`);
-          this.texte('acquisition bus=0 bus_max=0 age=3972');
+          // rust100/src/systeme.rs:878-906
+          const marche = this.majInfo.marcheS !== null ? ` marche_s=${this.majInfo.marcheS}` : '';
+          this.texte(`materiel cycles=${73120 + Math.round(this.t * 200)} calcul=240 calcul_max=328 duree_max=340 retards=0 err_driver=0 err_centrale=0 mem=148400 pile0=6388 pile1=1756 code_ram=55252 bus_max=0${marche} raz=${this.majInfo.raz}`);
+          const [b0, b1] = this.busDiag;
+          this.texte(`acquisition bus=0 bus_max=0 age=3972 abrt0=${b0.abrt.toString(16)} lig0=${b0.lig} rep0=${b0.tentatives}/${b0.reprises} ech0=${b0.echeances} actif0=${b0.actifs} abrt1=${b1.abrt.toString(16)} lig1=${b1.lig} rep1=${b1.tentatives}/${b1.reprises} ech1=${b1.echeances} actif1=${b1.actifs}`);
+          this.texte('nav pas_us=180 pas_max_us=420 plan_max_us=850 tranche_max_us=910');
         } else if (this.firmware === 'micropython') {
           this.texte(`materiel cycles=${46333 + Math.round(this.t * 100)} calcul=535 calcul_max=1853 duree_max=3183 retards=0 err_driver=0 err_centrale=0 mem=71728`);
         } else {
           this.texte('materiel cycles=' + Math.round(this.t * 100) + ' calcul=700 calcul_max=2000 duree_max=2300 retards=0 err_driver=0 err_centrale=0 mem=73728');
+        }
+        break;
+      case 'liaison':
+        if (this.firmware === 'rust') {
+          if (args[0] === 'raz') {
+            this.liaisonDiag.recus = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+            this.liaisonDiag.pertes = 0; this.liaisonDiag.rxerr = 0; this.liaisonDiag.txpleins = 0;
+            this.liaisonDiag.file = 0; this.liaisonDiag.ecartMs = 0; this.liaisonDiag.ordreUs = 0;
+            this.liaisonDiag.silence = 0;
+          }
+          const d = this.liaisonDiag;
+          const [m, s, u, a, t, p, e, maj, autre] = d.recus;
+          const paramerr = d.paramFile + d.paramMaj + d.paramInit + d.paramRep;
+          // rust100/liaison/src/diagnostic.rs:91
+          this.texte(`liaison m=${m} s=${s} u=${u} a=${a} t=${t} p=${p} e=${e} maj=${maj} autre=${autre} pertes=${d.pertes} rxerr=${d.rxerr} txpleins=${d.txpleins} file=${d.file} ecart_ms=${d.ecartMs} ordre_us=${d.ordreUs} silence=${d.silence} conn=${d.conn} deconn=${d.deconn} raison=${d.raison.toString(16).padStart(2, '0')} int_us=${d.intUs} lat=${d.lat} sup_ms=${d.supMs} mtu=${d.mtu} veille=${d.veille} pris=${d.pris} paramerr=${paramerr} paramfile=${d.paramFile} parammaj=${d.paramMaj} paraminit=${d.paramInit} paramrep=${d.paramRep}`);
+        } else {
+          this.err(`commande inconnue : ${mot}`);
+        }
+        break;
+      case 'redemarrer':
+        if (this.firmware !== 'rust') { this.err(`commande inconnue : ${mot}`); break; }
+        if (this._enMouvementPhysique()) { this.err('redemarrer : rover en mouvement'); break; }
+        this.surRedemarrage?.({ pourMaj: false });
+        break;
+      case 'journal':
+        if (this.firmware === 'rust' && !this.rustAncien) {
+          for (const j of this.journalEmbarque) {
+            this.texte(`j ${j.tMs} ${j.nom}${j.valeurs ? ` ${j.valeurs}` : ''}`);
+          }
+          this.texte(`j fin ${this.journalEmbarque.length} ${this.journalPerdus}`);
+        } else {
+          this.err(`commande inconnue : ${mot}`);
         }
         break;
       case 'profil':
@@ -401,35 +669,123 @@ export class FauxRover {
   /** Lignes envoyées à la connexion : identité du rover et liste des comportements. */
   envoyerInfos() {
     this.texte(`info version=${this.version} nom=${this.nom} cellule=${CELLULE} v_max=${this.params.v_max.v} w_max=${this.params.w_max.v}`);
-    this.texte(`modes ${this.modes.join(',')}`);
+    // rust100/src/systeme.rs:446 sépare par des espaces ; MicroPython (systeme.py:270) par des virgules
+    this.texte(`modes ${this.modes.join(this.firmware === 'rust' ? ' ' : ',')}`);
   }
 
   // ===== Comportements =====
 
   /** Arrête tout mouvement et tout comportement (STOP, urgence, manette qui reprend la main). */
   annuler() {
+    if (this.firmware === 'rust' && (this.mode !== 'manuel' || this.but)) {
+      this.evt('objectif abandonné'); // rust100/src/systeme.rs:497
+    }
     this.mode = 'manuel'; this.etat = {}; this.but = null;
     this.manette = { vx: 0, vy: 0, w: 0, monde: false, t: -10 };
     this.viderChemin();
   }
 
   lancerMode(nom, args) {
-    if (!this.modes.includes(nom)) { this.err(`mode inconnu : ${nom}`); return; }
+    if (nom === 'arret' || nom === 'manuel') { this.annuler(); if (this.firmware !== 'rust') this.evt('arrêt'); return; }
+    if (!nom || !this.modes.includes(nom)) { this.err(this.firmware === 'rust' ? 'mode indisponible' : `mode inconnu : ${nom}`); return; }
     this.annuler();
-    if (nom === 'arret' || nom === 'manuel') { this.evt('arrêt'); return; }
     this.mode = nom;
     const cote = Number(args[0]);
     this.etat = { t0: this.t, x0: this.x, y0: this.y, cap0: this.cap, cote: Number.isFinite(cote) && cote > 0.1 ? Math.min(cote, 1.2) : 0.5 };
-    if (nom === 'chien') { this.cible = { ...this.monde.ronde[0] }; this.idxRonde = 1; this.radar = 'suivi'; }
-    if (nom === 'explorer') { this.etat.phase = 'scan'; this.etat.tPhase = this.t; this.etat.echecs = []; this.radar = 'auto'; }
-    if (nom === 'base') this.allerA(0, 0, true);
+    this._noterJournal('mode', nom);
+
+    if (nom === 'aller' && this.firmware === 'rust') {
+      if (args.length !== 2) { this.err('mode indisponible'); this.mode = 'manuel'; return; }
+      const x = Number(args[0]); const y = Number(args[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) { this.err('objectif : coordonnées invalides'); this.mode = 'manuel'; return; }
+      this.evt('en route'); // navigateur/src/lib.rs:396
+      this.allerA(x, y, false, true);
+      return;
+    }
+    if (nom === 'course' && this.firmware === 'rust') {
+      if (args.length === 1) {
+        const d = Number(args[0]);
+        if (!Number.isFinite(d)) { this.err('course : distance invalide'); this.mode = 'manuel'; return; }
+        this.evt('course'); // navigateur/src/course.rs / lib.rs:392
+        this.allerA(this.x + d * Math.sin(this.cap), this.y + d * Math.cos(this.cap), false, true);
+        return;
+      }
+      if (args.length === 2) {
+        const x = Number(args[0]); const y = Number(args[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) { this.err('objectif : coordonnées invalides'); this.mode = 'manuel'; return; }
+        this.evt('course');
+        this.allerA(x, y, false, true);
+        return;
+      }
+      this.err('mode indisponible');
+      this.mode = 'manuel';
+      return;
+    }
+    if (nom === 'chien') {
+      this.cible = { ...this.monde.ronde[0] }; this.idxRonde = 1; this.radar = 'suivi';
+      if (this.firmware === 'rust') { this.evt('Mode chien : montre-toi !'); return; } // navigateur/src/chien.rs:473
+    }
+    if (nom === 'explorer') {
+      if (this.firmware === 'rust' && args.length >= 1) {
+        const d = Number(args[0]);
+        if (!Number.isFinite(d) || d <= 0) { this.err('explorer : durée invalide'); this.mode = 'manuel'; return; }
+        this.etat.dureeMax = d;
+      }
+      this.etat.phase = 'scan'; this.etat.tPhase = this.t; this.etat.echecs = []; this.etat.parcouru = 0; this.etat.prec = { x: this.x, y: this.y }; this.radar = 'auto';
+      if (this.firmware === 'rust') { this.evt("exploration : j'explore, puis je rentre"); return; } // navigateur/src/explorer.rs:115
+    }
+    if (nom === 'base') {
+      this.allerA(0, 0, true);
+      if (this.firmware === 'rust') { this.evt('retour à la base'); return; } // navigateur/src/lib.rs:406
+    }
     if (nom === 'patrouille') {
+      if (this.firmware === 'rust') {
+        const nombres = args.map(Number);
+        const invalide = args.length % 2 !== 0 || args.length < 4 || args.length > 12 || nombres.some((v) => !Number.isFinite(v) || Math.abs(v) > 5);
+        if (invalide) {
+          this.err('patrouille : de 2 à 6 points « x y » en mètres (ex. mode patrouille 0.5 0.5 -0.5 0.5)');
+          this.mode = 'manuel';
+          return;
+        }
+        const points = [];
+        for (let i = 0; i < nombres.length; i += 2) points.push({ x: nombres[i], y: nombres[i + 1] });
+        this.etat.points = points; this.etat.i = 0; this.etat.tour = 0; this.etat.atteints = 0;
+        this.evt(`patrouille : ${points.length} points, en boucle`); // navigateur/src/patrouille.rs:46
+        return;
+      }
       const nombres = args.map(Number).filter(Number.isFinite);
       const points = [];
       for (let i = 0; i + 1 < nombres.length && points.length < 6; i += 2) points.push({ x: nombres[i], y: nombres[i + 1] });
       if (points.length === 0) { this.err('patrouille : donnez au moins un point (x y en mètres)'); this.annuler(); return; }
       this.etat.points = points; this.etat.i = 0;
       this.evt(`patrouille de ${points.length} point${points.length > 1 ? 's' : ''}`);
+      return;
+    }
+    if (nom === 'calibrer' && this.firmware === 'rust') {
+      const arg = args[0];
+      const etapes = ['court', 'tpm', 'bras', 'lat', 'moteur', 'ff', 'accel', 'a_lin'];
+      let etape = 'tout';
+      if (arg !== undefined) {
+        if (etapes.includes(arg)) etape = arg === 'ff' ? 'moteur' : arg === 'a_lin' ? 'accel' : arg;
+        else if (!Number.isFinite(Number(arg))) { this.err('calibrer : étape inconnue'); this.mode = 'manuel'; return; }
+      }
+      this.etat.etape = etape;
+      this.etat.emis = 0;
+      this.evt('calibration : je me mesure, ne me touche pas'); // navigateur/src/calibrer.rs:209
+      return;
+    }
+    if (nom === 'autotest' && this.firmware === 'rust') {
+      if (args.length > 1 || (args.length === 1 && !Number.isFinite(Number(args[0])))) {
+        this.err('autotest : argument invalide');
+        this.mode = 'manuel';
+        return;
+      }
+      this.etat.mouvement = args.length === 1 && Number(args[0]) !== 0;
+      this.etat.emis = 0;
+      this.verdictAutotest = [];
+      this.evt(this.etat.mouvement
+        ? 'autotest : je vérifie les organes et les roues'
+        : 'autotest : je vérifie les organes (les roues ne bougent pas)'); // navigateur/src/autotest.rs:101-105
       return;
     }
     if (nom === 'carre' || nom === 'glisse') this.etat.etapes = this.etapesFigure(nom);
@@ -486,7 +842,7 @@ export class FauxRover {
     this.carte.fill(0);
     if (this.fenetre) { this.ox = -TAILLE_CARTE / 2; this.oy = -TAILLE_CARTE / 2; this.versionOrigine = (this.versionOrigine + 2) & 0xfe; this.envoyerOrigine(); this.renvoyerTout(); }
     this.annuler();
-    this.evt('recalé : nouvelle origine');
+    this.evt(this.firmware === 'rust' ? 'position remise à zéro' : 'recalé : nouvelle origine');
   }
 
   // ===== Planification sur la carte connue =====
@@ -676,15 +1032,28 @@ export class FauxRover {
       // En patrouille, 12 cm suffisent : un point trop près d'un obstacle n'arrêterait pas la boucle.
       if (this.mode === 'patrouille' && !cmd.fini && Math.hypot(this.but.x - this.x, this.but.y - this.y) < 0.12) cmd.fini = true;
       if (cmd.fini && this.mode === 'patrouille') {
-        this.evt(`point ${this.etat.i + 1} atteint`);
+        const pt = this.etat.points[this.etat.i];
+        if (this.firmware === 'rust') {
+          this.etat.atteints = (this.etat.atteints ?? 0) + 1;
+          // navigateur/src/patrouille.rs:87
+          this.evt(`patrouille : point ${this.etat.i + 1}/${this.etat.points.length} atteint (${pt.x.toFixed(2)} ; ${pt.y.toFixed(2)})`);
+        } else {
+          this.evt(`point ${this.etat.i + 1} atteint`);
+        }
         this.etat.i = (this.etat.i + 1) % this.etat.points.length; // on repart au premier point : patrouille en boucle
+        if (this.firmware === 'rust' && this.etat.i === 0) {
+          this.etat.tour = (this.etat.tour ?? 0) + 1;
+          this.evt(`patrouille : tour ${this.etat.tour} terminé (${this.etat.atteints}/${this.etat.points.length} points)`);
+          this.etat.atteints = 0;
+        }
         this.but = null;
         return nul;
       }
       if (cmd.fini) {
         this.tArrive = this.t;
-        this.evt(this.but.base ? 'de retour à la base' : 'arrivé');
-        this.annuler();
+        const msg = this.but.base ? (this.firmware === 'rust' ? 'à la base' : 'de retour à la base') : 'arrivé';
+        this.mode = 'manuel'; this.etat = {}; this.but = null; this.viderChemin();
+        this.evt(msg);
         return nul;
       }
       return cmd;
@@ -696,16 +1065,17 @@ export class FauxRover {
       case 'carre':
       case 'glisse': return this.comportementFigure(vmax);
       case 'danse': {
-        if (tm > 14) { this.evt('danse terminée'); this.annuler(); return nul; }
+        if (tm > 14) { this.evt('danse terminée'); this.mode = 'manuel'; this.etat = {}; return nul; }
         const ph = tm * 2 * Math.PI;
         return { vx: 0.22 * Math.sin(ph / 2.5), vy: 0.1 * Math.sin(ph / 1.25), w: 1.8 * Math.sin(ph / 3.5) };
       }
       case 'slalom': {
         const devant = lancer(this.monde, this.x, this.y, Math.sin(this.cap), Math.cos(this.cap));
-        if (tm > 14 || devant < 0.5) { this.evt('slalom terminé'); this.annuler(); return nul; }
+        if (tm > 14 || devant < 0.5) { this.evt('slalom terminé'); this.mode = 'manuel'; this.etat = {}; return nul; }
         return { vx: 0.2 * Math.sin((tm * 2 * Math.PI) / 3), vy: Math.min(vmax, 0.25), w: 0 };
       }
       case 'calibrer': {
+        if (this.firmware === 'rust') return this.comportementCalibrerRust(tm);
         const fait = Math.abs(enrouler(this.cap - this.etat.cap0));
         if (tm > 1 && (fait < 0.12 || tm > 6.5)) {
           this.texte('calib gyro_biais=0.0031 echelle=1.002 deriv=0.04');
@@ -715,6 +1085,7 @@ export class FauxRover {
         }
         return { vx: 0, vy: 0, w: 1.2 };
       }
+      case 'autotest': return this.comportementAutotestRust(tm);
       case 'mur': return this.comportementMur(tm, vmax);
       default: return nul;
     }
@@ -764,7 +1135,20 @@ export class FauxRover {
     }
     if (e.phase === 'cherche') {
       const f = this.trouverFrontiere();
-      if (!f) { this.evt('exploration terminée'); this.annuler(); return nul; }
+      if (!f) {
+        if (this.firmware === 'rust') {
+          this.evt('plus rien à découvrir'); // navigateur/src/explorer.rs:185
+          this.evt('retour à la base'); // navigateur/src/explorer.rs:212
+          const d = (e.parcouru ?? 0).toFixed(1);
+          const duree = Math.round(this.t - e.t0);
+          // navigateur/src/explorer.rs:267
+          this.evt(`bilan : 3.2 m² explorés, ${d} m parcourus en ${duree} s (retour à 2 cm de la base)`);
+        } else {
+          this.evt('exploration terminée');
+        }
+        this.mode = 'manuel'; this.etat = {}; this.but = null; this.viderChemin();
+        return nul;
+      }
       e.but = f; e.tBut = this.t; e.phase = 'va'; this.tReplan = -10;
       return nul;
     }
@@ -790,6 +1174,62 @@ export class FauxRover {
       : this.allerDirect(etape.x, etape.y, etape.cap, Math.min(vmax, 0.3));
     if (cmd.fini) e.i++;
     return cmd;
+  }
+
+  comportementCalibrerRust(tm) {
+    const etape = this.etat.etape ?? 'tout';
+    const toutes = etape === 'tout' || etape === 'court';
+    const lignes = [];
+    if (toutes || etape === 'tpm' || etape === 'lat') lignes.push('calib mur=0.68 perpendiculaire=0.5'); // calibrer.rs:701
+    if (toutes || etape === 'tpm') lignes.push('calib tpm=14120 (avant 14000)'); // calibrer.rs:972
+    if (toutes || etape === 'bras') lignes.push('calib bras=0.1320 (avant 0.1300)'); // calibrer.rs:453
+    if (toutes || etape === 'lat') lignes.push('calib lat=1.215 (avant 1.200)'); // calibrer.rs:991
+    if (toutes || etape === 'moteur') lignes.push('calib ff_zm=448 ff_v1=8520 ff_v2=10790 (erreur 1.8 %)'); // calibrer.rs:1063
+    if (toutes || etape === 'accel') lignes.push('calib a_lin=1.28 (patinage à 1.6)'); // calibrer.rs:1111
+    const nb = lignes.filter((l) => !l.startsWith('calib mur=')).length;
+    const step = Math.floor(tm / 0.35);
+    while ((this.etat.emis ?? 0) < Math.min(step, lignes.length)) {
+      this.texte(lignes[this.etat.emis++]);
+    }
+    if (tm >= lignes.length * 0.35 + 0.35) {
+      this.texte('calib enregistré flash'); // calibrer.rs:1147
+      this.evt(`calibration finie : ${nb} réglages enregistrés`); // calibrer.rs:1149
+      this.mode = 'manuel'; this.etat = {}; this.viderChemin();
+      return { vx: 0, vy: 0, w: 0 };
+    }
+    return { vx: 0, vy: 0, w: 0.8 };
+  }
+
+  comportementAutotestRust(tm) {
+    // navigateur/src/autotest.rs:245-365,461
+    const lignes = [
+      `autotest : tension : ${this.tension.toFixed(1)} V : OK`,
+      'autotest : pilote des moteurs : répond : OK',
+      'autotest : centrale : répond, gyroscope prêt : OK',
+      'autotest : sonar : 32 tirs, 12 directions avec écho : OK',
+      'autotest : servo : les échos changent avec le gisement (0.42 m d\'écart) : OK',
+    ];
+    if (this.etat.mouvement) {
+      lignes.push(
+        'autotest : roue avant gauche : sens et encodeur corrects (1850 et 1820 tops/s) : OK',
+        'autotest : roue arrière gauche : sens et encodeur corrects (1840 et 1810 tops/s) : OK',
+        'autotest : roue avant droit : sens et encodeur corrects (1860 et 1830 tops/s) : OK',
+        'autotest : roue arrière droit : sens et encodeur corrects (1845 et 1815 tops/s) : OK',
+      );
+    }
+    const step = Math.floor(tm / 0.2);
+    while ((this.etat.emis ?? 0) < Math.min(step, lignes.length)) {
+      const l = lignes[this.etat.emis++];
+      this.verdictAutotest.push(l);
+      this.evt(l);
+    }
+    if (tm >= lignes.length * 0.2 + 0.25) {
+      const fin = 'autotest : tout va bien';
+      this.verdictAutotest.push(fin);
+      this.evt(fin);
+      this.mode = 'manuel'; this.etat = {}; this.viderChemin();
+    }
+    return { vx: 0, vy: 0, w: 0 };
   }
 
   comportementMur(tm, vmax) {
@@ -1040,6 +1480,10 @@ export class FauxRover {
     Object.keys(this.params).forEach((n) => this.ligneP(n));
     this.cheminEnvoye = '';
     this.envoyerChemin();
+    if (this.firmware === 'rust') {
+      // rust100/src/systeme.rs:321-328 : renvoie le verdict mémorisé du dernier autotest
+      for (const l of this.verdictAutotest.slice(-8)) this.evt(l);
+    }
     this.evt('démo : rover simulé connecté');
   }
 }
