@@ -4,6 +4,7 @@
 
 export const MAX_POINTS = 6;
 export const MIN_POINTS = 2;
+export const PORTEE_PATROUILLE = 5.0; // rust100/src/systeme.rs:714 : |x| <= 5.0 et |y| <= 5.0
 
 const deux = (v) => {
   const t = (Math.round(v * 100) / 100).toFixed(2);

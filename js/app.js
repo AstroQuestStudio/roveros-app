@@ -2,7 +2,7 @@
 // et l'interface. Lisez-le de haut en bas : chaque section porte un titre.
 
 import {
-  decoder, analyserLigne, encoderTexte, encoderPing, encoderAller, encoderUrgence, encoderStop,
+  decoder, analyserLigne, AssembleurFragments, encoderTexte, encoderPing, encoderAller, encoderUrgence, encoderStop,
 } from './protocole.js';
 import { TransportBle, bluetoothDisponible } from './transport-ble.js';
 import { TransportWs, normaliserUrlWs } from './transport-ws.js';
@@ -19,10 +19,13 @@ import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
 import { commandesVitesse, limiterVitesse } from './vitesse.js';
 import { MesureLatence, EssaiQualiteLiaison } from './latence.js';
 import { normaliser180 } from './lissage.js';
-import { Patrouille, MAX_POINTS, MIN_POINTS } from './patrouille.js';
+import { Patrouille, MAX_POINTS, MIN_POINTS, PORTEE_PATROUILLE } from './patrouille.js';
 import { PORTEE_ALLER_MAX } from './repere.js';
 import { diagnosticMateriel, aDiagnosticEtendu } from './materiel.js';
 import { detecterFirmware, libelleFirmware } from './firmware.js';
+import {
+  lireEnteteMaj, verifierCompatibilitePaquet, tailleBlocPourMtu, PilotageMaj, verifierApresRedemarrage,
+} from './maj.js';
 import {
   JournalSeance, StockageJournal, analyserJournal, exporterJson,
   CHAMPS_RUST_DEMANDES, SOURCES_DOIGT, ACTIONS_DOIGT,
@@ -47,10 +50,25 @@ const S = {
   profil: detecterFirmware({}, []),
   materiel: null,
   acquisition: null,
+  acqBrut: null,
+  nav: null,
+  liaison: null,
+  diagDemandeSession: false,
   profils: [],
   etat: null, // dernière trame ÉTAT décodée
   champs: null, // derniers champs supplémentaires (plafond, frein…)
   champsDemandesSession: false,
+  majEtatRover: null,
+  majBrut: null,
+  majAttenteVerif: null,
+  paquetMaj: null,
+  numCarteOrigine: null,
+  calibEtapes: [],
+  autotestResultats: [],
+  distanceCourse: 3.0,
+  decalagePerfMs: null,
+  journalLotId: 0,
+  journalReleveEnCours: false,
   liaisonRalentieJusqua: 0,
   urgence: { actif: false, essais: 0 },
   journal: [],
@@ -164,6 +182,9 @@ function rendreJournal() {
 
   $('#jr-partager').hidden = !navigator.share;
   $('#jr-demo').hidden = S.transport?.nom !== 'demo';
+  $('#jr-relever').hidden = !(S.transport?.connecte && S.profil.capacites.journalRover);
+  $('#jr-relever').disabled = S.journalReleveEnCours;
+  rendreJournalRover();
 
   const liste = $('#journal-liste');
   liste.textContent = '';
@@ -176,6 +197,25 @@ function rendreJournal() {
     liste.append(li);
   }
   $('#journal-vide').hidden = S.journal.length > 0;
+}
+
+function rendreJournalRover() {
+  const bloc = $('#jr-rover-bloc');
+  const lignes = journal.journalRover;
+  bloc.hidden = lignes.length === 0 && !S.journalReleveEnCours;
+  const liste = $('#jr-rover-liste');
+  liste.textContent = '';
+  for (const e of lignes.slice(-200)) {
+    const li = document.createElement('li');
+    li.className = 'evt';
+    const h = document.createElement('span'); h.className = 'heure';
+    if (e.aligne) h.textContent = new Date(journal.epochDe(e.t)).toLocaleTimeString('fr-FR');
+    else if (e.tempsMs != null) h.textContent = `+${(e.tempsMs / 1000).toFixed(2).replace('.', ',')} s`;
+    else h.textContent = 'rover';
+    const t = document.createElement('span'); t.textContent = e.ligne;
+    li.append(h, t);
+    liste.append(li);
+  }
 }
 
 function construireFichierJournal() {
@@ -222,6 +262,17 @@ $('#jr-demo').addEventListener('click', () => {
   alimenterDemoJournal(journal);
   stockageJournal.sauvegarder();
   rendreJournal();
+});
+$('#jr-relever').addEventListener('click', () => {
+  if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
+  S.journalLotId += 1;
+  S.journalReleveEnCours = true;
+  S.decalagePerfMs = null;
+  $('#jr-relever').disabled = true;
+  $('#jr-rover-bloc').hidden = false;
+  poserTexte($('#jr-rover-stats'), 'Relevé du journal du rover en cours…');
+  if (S.profil.famille === 'rust') envoyerTexte('champ t', { silencieux: true });
+  envoyerTexte('journal');
 });
 $('#btn-marquer').addEventListener('click', () => {
   journal.marquer(performance.now());
@@ -277,12 +328,24 @@ carte.addEventListener('vue', (ev) => $('#btn-recentrer').classList.toggle('acti
 /** Toucher un point de la carte : marqueur + trame ALLER. */
 function allerAuPoint(x, y) {
   if (patrouille.actif) { // en mode patrouille, chaque toucher ajoute un point numéroté (le simple « aller ici » reste le comportement normal)
+    if (S.profil.famille === 'rust' && (Math.abs(x) > PORTEE_PATROUILLE || Math.abs(y) > PORTEE_PATROUILLE)) {
+      afficherToast('err', `Point hors zone : ${PORTEE_PATROUILLE} m au plus autour de la base`);
+      return;
+    }
     if (patrouille.ajouter(x, y)) vibrer(8); else afficherToast('err', `${MAX_POINTS} points au plus`);
     majPatrouille();
     return;
   }
   if (S.urgence.actif) { afficherToast('err', "Arrêt d'urgence actif : déverrouillez-le pour bouger"); return; }
   if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
+  if (S.profil.famille === 'rust') {
+    if (!S.modes.includes('aller')) { afficherToast('err', 'Déplacement vers un point absent sur ce firmware'); return; }
+    carte.poserMarqueur(x, y);
+    S.cibleAller = { x, y, t: performance.now() };
+    envoyerTexte(`mode aller ${x.toFixed(2)} ${y.toFixed(2)}`);
+    noter('app', `Aller vers (${x.toFixed(2)} ; ${y.toFixed(2)}) m`, { toast: false });
+    return;
+  }
   const rel = carte.repere.relatif(x, y); // mm relatifs au centre de la fenêtre du rover
   if (!rel) { afficherToast('err', `Trop loin : ${PORTEE_ALLER_MAX} m au plus`); return; }
   carte.poserMarqueur(x, y);
@@ -318,17 +381,28 @@ const masqueDoigts = () => (pilote.contacts.has('joystick') ? 1 : 0)
 // ============================================================================
 
 const LIBELLES_ETAT = { deconnecte: 'Hors ligne', connexion: 'Connexion…', connecte: 'Connecté', reconnexion: 'Reconnexion…', erreur: 'Liaison perdue' };
+const assembleurFragments = new AssembleurFragments();
+const pilotageMaj = new PilotageMaj({ envoyer: (trame, opts) => S.transport?.envoyer(trame, opts) ?? false });
+let timerVerifMaj = null;
 
 function utiliserTransport(transport) {
   if (S.transport) { S.transport.deconnecter(); }
+  clearTimeout(timerVerifMaj);
+  pilotageMaj.annuler();
+  assembleurFragments.reinitialiser();
   S.transport = transport;
   S.modes = []; S.modesRecus = false; S.info = {}; S.infoRecue = false; S.annonces = {};
-  S.materiel = null; S.acquisition = null; S.profils = []; S.etat = null; S.champs = null; S.champsDemandesSession = false;
+  S.materiel = null; S.acquisition = null; S.acqBrut = null; S.nav = null; S.liaison = null; S.diagDemandeSession = false;
+  S.profils = []; S.etat = null; S.champs = null; S.champsDemandesSession = false;
+  S.majEtatRover = null; S.majBrut = null; S.numCarteOrigine = null; S.calibEtapes = []; S.autotestResultats = [];
+  S.decalagePerfMs = null; S.journalReleveEnCours = false;
   S.profil = detecterFirmware({}, []);
   essaiQualite.arreter();
   reglages.vider();
   carte.effacerCarte(); carte.reinitialiserTrajet(); carte.rover.ok = false; S.cibleAller = null; S.posAbsolue = null;
   reinitialiserRetoursReglages();
+  rendreCalibJournal();
+  rendreAutotest();
   afficherMateriel();
   actualiserProfil();
   rendreModes();
@@ -371,13 +445,17 @@ function surEtatLiaison(t, { etat, message }) {
     pilote.toutArreter();
     diagnostic.reinitialiser();
     essaiQualite.arreter();
+    pilotageMaj.annuler();
+    assembleurFragments.reinitialiser();
     S.veille = false; carte.veille = false; S.tEtat = 0; S.ecritureKo = false; S.champs = null; S.champsDemandesSession = false;
+    S.diagDemandeSession = false; S.journalReleveEnCours = false;
     $('#liaison-signal').dataset.barres = '0';
     latence.reinitialiser();
     poserTexte($('#lat-val'), '— ms');
     poserTexte($('#bar-vitesse'), '0,00 m/s');
   } else {
     latence.reinitialiser();
+    S.majEtatRover = null; S.majBrut = null; S.materiel = null; S.acquisition = null; S.acqBrut = null; S.nav = null; S.liaison = null;
   }
   journal.noterLiaison(performance.now(), etat, message, t.nom, S.profil);
   if (etat === 'erreur') noter('err', message || 'Liaison perdue');
@@ -395,9 +473,18 @@ function surEtatLiaison(t, { etat, message }) {
     S.verifSecurites = true; // les sécurités obstacles sont remises en service si on les trouve coupées
     setTimeout(() => { S.verifSecurites = false; }, 20000); // la liste des paramètres met quelques secondes à arriver
     noter('app', `Connecté : ${nomLiaison(t)}`, { toast: false });
-    // Au départ on demande tout : identité + comportements, puis les paramètres.
-    setTimeout(() => { if (S.transport === t && t.connecte) { t.envoyer(encoderTexte('infos')); t.envoyer(encoderTexte('params')); } }, 250);
+    // Au départ on demande tout : identité + comportements, paramètres et état de mise à jour.
+    setTimeout(() => {
+      if (S.transport !== t || !t.connecte) return;
+      t.envoyer(encoderTexte('infos'));
+      t.envoyer(encoderTexte('params'));
+      t.envoyer(encoderTexte('maj'));
+    }, 250);
     setTimeout(() => { if (S.transport === t && t.connecte) envoyerVitesse(true); }, 500);
+    if (S.majAttenteVerif) {
+      clearTimeout(timerVerifMaj);
+      timerVerifMaj = setTimeout(() => verifierMajApresReconnexion(true), 1800);
+    }
     if (S.urgence.actif) envoyerUrgence(true); // l'urgence verrouillée survit à une reconnexion
   }
 }
@@ -454,8 +541,16 @@ function surTrame(octets) {
       if (!S.annonces.bancEcho) { S.annonces.bancEcho = true; actualiserProfil(); }
       essaiQualite.surEcho(m.donnees);
       break;
-    case 'origine': carte.appliquerOrigine(m); break; // la fenêtre de carte du rover a glissé : tout reste en absolu
-    case 'maj': break; // mise à jour du firmware (0xA0) : elle se fait depuis le PC, on ignore
+    case 'origine':
+      if (typeof m.carte === 'number') {
+        if (S.numCarteOrigine !== null && m.carte !== S.numCarteOrigine) carte.effacerCarte();
+        S.numCarteOrigine = m.carte;
+      }
+      carte.appliquerOrigine(m); // la fenêtre de carte du rover a glissé : tout reste en absolu
+      break;
+    case 'maj':
+      if (typeof m.etat === 'number') pilotageMaj.surReponse(m);
+      break;
     default: break; // type inconnu : on l'ignore sans bruit
   }
 }
@@ -610,14 +705,28 @@ function majBatterieEntete(e, etat) {
   bloc.setAttribute('aria-label', bloc.title);
 }
 
+function noterDiagMaterielSiPret() {
+  if (!S.materiel) return;
+  const diag = diagnosticMateriel(S.materiel, S.acquisition, S.profils, { acqBrut: S.acqBrut, nav: S.nav, liaison: S.liaison });
+  journal.noterDiagnostic(performance.now(), diag);
+  return diag;
+}
+
 function surLigne(texte) {
-  const l = analyserLigne(texte);
-  if (l.genre !== 'param' && l.genre !== 'champs') reglages.ecrireConsole(texte, 'entrant', l.genre);
-  if (l.genre !== 'champs') journal.noterTexte(performance.now(), texte);
+  const texteComplet = assembleurFragments.pousser(texte);
+  if (texteComplet === null) return;
+  const l = analyserLigne(texteComplet);
+  if (l.genre !== 'param' && l.genre !== 'champs' && l.genre !== 'journal_rover') reglages.ecrireConsole(texteComplet, 'entrant', l.genre);
+  if (l.genre !== 'champs' && l.genre !== 'journal_rover') journal.noterTexte(performance.now(), texteComplet);
   switch (l.genre) {
     case 'champs':
       journal.noterChamps(performance.now(), l.valeurs);
       S.champs = l.valeurs;
+      if (typeof l.valeurs.t === 'number') {
+        S.decalagePerfMs = performance.now() - l.valeurs.t;
+        if (S.journalLotId > 0) journal.alignerJournalRover(S.journalLotId, S.decalagePerfMs);
+        if ($('#dlg-journal').open) rendreJournalRover();
+      }
       majLigneEtat(S.etat);
       break;
     case 'info':
@@ -625,11 +734,19 @@ function surLigne(texte) {
       S.infoRecue = true;
       if (typeof l.valeurs.cellule === 'number') carte.definirCellule(l.valeurs.cellule);
       actualiserProfil();
-      if (S.profil.famille === 'rust' && !S.champsDemandesSession && S.transport?.connecte) {
-        S.champsDemandesSession = true;
-        journal.champsDemandes = [...CHAMPS_RUST_DEMANDES];
-        S.transport.envoyer(encoderTexte(`champ ${CHAMPS_RUST_DEMANDES.join(' ')}`));
+      if (S.profil.famille === 'rust' && S.transport?.connecte) {
+        if (!S.champsDemandesSession) {
+          S.champsDemandesSession = true;
+          journal.champsDemandes = [...CHAMPS_RUST_DEMANDES];
+          S.transport.envoyer(encoderTexte(`champ ${CHAMPS_RUST_DEMANDES.join(' ')}`));
+        }
+        if (!S.diagDemandeSession) {
+          S.diagDemandeSession = true;
+          S.transport.envoyer(encoderTexte('materiel'));
+          S.transport.envoyer(encoderTexte('liaison'));
+        }
       }
+      verifierMajApresReconnexion(false);
       break;
     case 'modes':
       S.modes = l.modes;
@@ -638,30 +755,54 @@ function surLigne(texte) {
       rendreModes();
       break;
     case 'param': reglages.majParam(l); surParamRecu(l); break;
+    case 'maj':
+      S.majEtatRover = l.valeurs;
+      S.majBrut = l.brut;
+      if (!S.annonces.majIndisponible) S.annonces.majDisponible = true;
+      actualiserProfil();
+      verifierMajApresReconnexion(false);
+      break;
     case 'evt':
-      // veille et réveil : sobrement, dans la pastille d'état et le journal, sans notification
       // veille / réveil, et l'écho d'un réglage (« v_max = 0.4 ») : dans le journal seulement, sans notification
       noter('evt', l.message, { toast: !/^(veille|r[ée]veil)/i.test(l.message) && !/^[a-z_0-9]+ = \S+$/i.test(l.message) });
       if (/^veille\b/i.test(l.message)) { S.veille = true; carte.veille = true; carte.invalide = true; majLigneEtat(S.etat); }
       else if (/^r[ée]veil/i.test(l.message)) { S.veille = false; carte.veille = false; carte.invalide = true; majLigneEtat(S.etat); }
       if (/repos[ée]|remises? à zéro/i.test(l.message)) signalerRecalage();
-      else if (/carte (effacée|vidée|remise)/i.test(l.message)) carte.effacerCarte(); // la carte arrive « par différences » : on vide aussi la nôtre
+      else if (/carte (effacée|vidée|remise)/i.test(l.message)) carte.effacerCarte();
+      if (/^(arriv[ée]|objectif abandonné|pas de passage)/i.test(l.message)) { S.cibleAller = null; carte.poserMarqueur(null); }
       if (/^param[èe]tres (enregistrés|inchangés|d'usine restaurés)/i.test(l.message)) {
         afficherRetour('#params-retour', l.message, 'ok');
         if (/usine/i.test(l.message)) setTimeout(() => envoyerTexte('params', { silencieux: true }), 200);
       }
-      if (/^nom enregistré\s*:/i.test(l.message)) afficherRetour('#rover-nom-retour', l.message, 'ok');
+      if (/^nom (?:enregistré\s*:|d'origine)/i.test(l.message)) afficherRetour('#rover-nom-retour', l.message, 'ok');
+      if (/^autotest\s*:/i.test(l.message)) traiterLigneAutotest(l.message);
+      if (/^calibration\b/i.test(l.message)) ajouterEtapeCalib(l.message);
       break;
     case 'materiel':
       S.materiel = l.valeurs;
       S.acquisition = null;
+      S.acqBrut = null;
       if (aDiagnosticEtendu(l.valeurs)) { S.annonces.diagnosticEtendu = true; actualiserProfil(); }
+      noterDiagMaterielSiPret();
       afficherMateriel();
+      verifierMajApresReconnexion(false);
       break;
     case 'acquisition':
       S.acquisition = l.valeurs;
+      S.acqBrut = l.brut;
       S.annonces.diagnosticEtendu = true;
       actualiserProfil();
+      noterDiagMaterielSiPret();
+      afficherMateriel();
+      break;
+    case 'nav':
+      S.nav = l.valeurs;
+      noterDiagMaterielSiPret();
+      afficherMateriel();
+      break;
+    case 'liaison':
+      S.liaison = l.valeurs;
+      noterDiagMaterielSiPret();
       afficherMateriel();
       break;
     case 'profil': {
@@ -674,15 +815,52 @@ function surLigne(texte) {
     }
     case 'err':
       noter('err', l.message);
-      if (/mise à jour sans fil\s*:\s*indisponible/i.test(l.message)) {
+      if (/mise à jour sans fil\s*:\s*indisponible|commande inconnue\s*:\s*maj\b/i.test(l.message)) {
         S.annonces.majIndisponible = true;
         actualiserProfil();
       }
+      if (/commande inconnue\s*:\s*journal\b/i.test(l.message)) {
+        S.annonces.journalIndisponible = true;
+        S.journalReleveEnCours = false;
+        actualiserProfil();
+        if ($('#dlg-journal').open) rendreJournal();
+      }
+      if (/commande inconnue\s*:\s*params\b/i.test(l.message)) { S.annonces.sauverIndisponible = true; actualiserProfil(); }
       if (/^params\b/i.test(l.message)) afficherRetour('#params-retour', l.message, 'err');
       if (/^nom\b/i.test(l.message)) afficherRetour('#rover-nom-retour', l.message, 'err');
+      if (/^(calibrer|calibration)\b/i.test(l.message)) ajouterEtapeCalib(l.message, true);
+      if (/^autotest\b/i.test(l.message)) traiterLigneAutotest(l.message, true);
+      if (/^(maj|mise à jour)\b/i.test(l.message)) afficherRetour('#maj-retour', l.message, 'err');
       break;
-    case 'calib': noter('evt', `Calibration : ${Object.entries(l.valeurs).map(([k, v]) => `${k} = ${v}`).join(', ')}`); break;
-    default: break;
+    case 'calib': {
+      const paires = Object.entries(l.valeurs).map(([k, v]) => `${k} = ${v}`).join(', ');
+      const texteCalib = paires || l.reste || texteComplet;
+      noter('evt', `Calibration : ${texteCalib}`);
+      ajouterEtapeCalib(texteCalib);
+      if (/enregistré flash|calibration finie|termin/i.test(texteComplet) && S.transport?.connecte) {
+        setTimeout(() => envoyerTexte('params', { silencieux: true }), 250);
+      }
+      break;
+    }
+    case 'journal_rover':
+      if (!S.annonces.journalIndisponible) { S.annonces.journalDisponible = true; actualiserProfil(); }
+      journal.noterJournalRover(performance.now(), l.brut ?? texteComplet, l, { lotId: S.journalLotId, decalagePerfMs: S.decalagePerfMs });
+      if ($('#dlg-journal').open) rendreJournalRover();
+      break;
+    case 'journal_fin':
+      S.journalReleveEnCours = false;
+      $('#jr-relever').disabled = false;
+      $('#jr-rover-bloc').hidden = false;
+      poserTexte($('#jr-rover-stats'), `Relevé terminé : ${l.nombre} ligne(s)${l.perdus ? ` · ${l.perdus} perdue(s)` : ''}`);
+      if ($('#dlg-journal').open) rendreJournalRover();
+      break;
+    default:
+      if (l.mot === 'nav') {
+        S.nav = l.valeurs;
+        noterDiagMaterielSiPret();
+        afficherMateriel();
+      }
+      break;
   }
 }
 
@@ -737,11 +915,17 @@ function appliquerProfilUI() {
   poserTexte($('#b-qualite-aide'), `Envoie ${methode} pour mesurer l'aller-retour médian et les pertes.`);
   $('#btn-qualite-liaison').disabled = !connecte || essaiQualite.actif;
 
-  // Réglages : en-tête firmware, nom du rover, sauvegarde / usine
+  // Réglages : en-tête firmware, mise à jour sans fil, nom du rover, sauvegarde / usine
   $('#r-firmware-boite').hidden = !connecte;
   if (connecte) {
     poserTexte($('#r-firmware-nom'), libFw);
     poserTexte($('#r-firmware-maj'), cap.majSansFil ? 'Mise à jour sans fil : disponible (trames 0x20–0x23)' : 'Mise à jour sans fil : pas sur ce firmware');
+  }
+  $('#maj-badge-indispo').hidden = !connecte || cap.majSansFil;
+  majAffichageMajRover();
+  if ($('#dlg-journal').open) {
+    $('#jr-relever').hidden = !(connecte && cap.journalRover);
+    $('#jr-relever').disabled = S.journalReleveEnCours;
   }
 
   const nomOk = connecte && cap.changementNom;
@@ -772,6 +956,10 @@ function rendreModes() {
     $('#btn-modes-infos').hidden = S.modesRecus;
   }
   $('#modes-cote').hidden = !noms.some((n) => n === 'carre' || n === 'glisse');
+  $('#modes-course').hidden = !noms.includes('course');
+  const calibDispo = noms.includes('calibrer') || S.profil.capacites.calibrationAuto;
+  $('#calib-boite').hidden = !calibDispo;
+  $('#autotest-boite').hidden = !noms.includes('autotest');
   for (const nom of noms) {
     const connu = MODES_FR[nom];
     const b = document.createElement('button');
@@ -783,7 +971,8 @@ function rendreModes() {
     $('.mode-aide', b).textContent = connu?.aide ?? 'Comportement du rover';
     b.addEventListener('click', () => {
       if (nom === 'patrouille') { ouvrirPatrouille(); return; }
-      const arg = nom === 'carre' || nom === 'glisse' ? ` ${S.cote}` : '';
+      if (nom === 'aller') { allerA('carte'); afficherToast('evt', 'Touchez un point sur la carte pour y envoyer le rover'); return; }
+      const arg = nom === 'carre' || nom === 'glisse' ? ` ${S.cote}` : nom === 'course' ? ` ${S.distanceCourse}` : '';
       if (envoyerTexte(`mode ${nom}${arg}`)) {
         vibrer(15);
         if (nom !== 'arret') afficherToast('evt', `${libelleMode(nom)} lancé`);
@@ -811,12 +1000,112 @@ function rendreModes() {
 function surfaceModeActif(e) {
   const nom = S.modes[e.comportement];
   $$('#modes-grille .mode').forEach((b) => b.classList.toggle('actif', e.comportement !== 0 && b.dataset.mode === nom));
+  const enCalib = e.comportement !== 0 && nom === 'calibrer';
+  const enTest = e.comportement !== 0 && nom === 'autotest';
+  if ($('#btn-calib-stop')) $('#btn-calib-stop').disabled = !enCalib;
+  if ($('#btn-calib-lancer')) $('#btn-calib-lancer').disabled = enCalib;
+  if ($('#btn-autotest-court')) $('#btn-autotest-court').disabled = enTest;
+  if ($('#btn-autotest-roues')) $('#btn-autotest-roues').disabled = enTest;
+  if (enCalib) poserTexte($('#calib-etat'), 'En cours…');
+  else if ($('#calib-etat').textContent === 'En cours…') poserTexte($('#calib-etat'), 'Terminée');
+  if (enTest) poserTexte($('#autotest-etat'), 'En cours…');
+  else if ($('#autotest-etat').textContent === 'En cours…') poserTexte($('#autotest-etat'), 'Terminé');
+}
+
+function ajouterEtapeCalib(texte, erreur = false) {
+  S.calibEtapes.push({ texte, erreur });
+  if (S.calibEtapes.length > 40) S.calibEtapes.shift();
+  poserTexte($('#calib-etat'), erreur ? 'Erreur' : (/enregistré flash|finie|termin/i.test(texte) ? 'Terminée' : 'En cours…'));
+  rendreCalibJournal();
+}
+function rendreCalibJournal() {
+  const liste = $('#calib-journal');
+  if (!liste) return;
+  liste.textContent = '';
+  liste.hidden = S.calibEtapes.length === 0;
+  for (const e of S.calibEtapes) {
+    const li = document.createElement('li');
+    li.className = e.erreur ? 'err' : 'evt';
+    li.textContent = e.texte;
+    liste.append(li);
+  }
+}
+
+function traiterLigneAutotest(message, erreur = false) {
+  if (erreur) { poserTexte($('#autotest-etat'), message); return; }
+  const corps = message.replace(/^autotest\s*:\s*/i, '').trim();
+  const estDebut = /^(d[ée]marrage|fin|termin|tout va bien|je v[ée]rifie|anomalie)/i.test(corps);
+  if (/^(d[ée]marrage|je v[ée]rifie)/i.test(corps)) S.autotestResultats = [];
+  if (estDebut) {
+    poserTexte($('#autotest-etat'), corps);
+    rendreAutotest();
+    return;
+  }
+  const idxSep = corps.lastIndexOf(':');
+  const m = idxSep > 0
+    ? [corps, corps.slice(0, idxSep), corps.slice(idxSep + 1)]
+    : /^([^=]+?)\s*=\s*(.+)$/.exec(corps);
+  const organe = m ? m[1].trim() : corps;
+  const verdict = m ? m[2].trim() : '';
+  const statut = /\b(ko|err|echec|défaut|bloqué)\b/i.test(verdict) ? 'ko'
+    : /\b(absent|non connecté|muet|non test[ée]s?)\b/i.test(verdict) ? 'absent'
+      : /\b(ok|bon|passé|réussi)\b/i.test(verdict) ? 'ok' : '';
+  S.autotestResultats.push({ organe, verdict, statut });
+  poserTexte($('#autotest-etat'), S.autotestResultats.some((r) => r.statut === 'ko') ? 'Anomalie détectée' : 'Vérification effectuée');
+  rendreAutotest();
+}
+function rendreAutotest() {
+  const liste = $('#autotest-liste');
+  if (!liste) return;
+  liste.textContent = '';
+  liste.hidden = S.autotestResultats.length === 0;
+  for (const r of S.autotestResultats) {
+    const li = document.createElement('li');
+    li.className = `autotest-item${r.statut ? ` ${r.statut}` : ''}`;
+    const nom = document.createElement('span'); nom.textContent = r.organe;
+    const val = document.createElement('strong'); val.className = 'chiffres'; val.textContent = r.verdict;
+    li.append(nom, val);
+    liste.append(li);
+  }
 }
 
 $('#btn-modes-infos').addEventListener('click', () => envoyerTexte('infos'));
 $('#cote').addEventListener('input', (ev) => {
   S.cote = Number(ev.target.value);
   $('#cote-val').textContent = `${S.cote.toFixed(1).replace('.', ',')} m`;
+});
+$('#course-dist').addEventListener('input', (ev) => {
+  S.distanceCourse = Number(ev.target.value);
+  $('#course-val').textContent = `${S.distanceCourse.toFixed(1).replace('.', ',')} m`;
+});
+$('#btn-calib-lancer').addEventListener('click', () => {
+  const etape = $('#calib-etape').value;
+  const cmd = etape ? `mode calibrer ${etape}` : 'mode calibrer';
+  S.calibEtapes = [];
+  rendreCalibJournal();
+  if (envoyerTexte(cmd)) {
+    poserTexte($('#calib-etat'), 'En cours…');
+    $('#btn-calib-stop').disabled = false;
+    afficherToast('evt', 'Calibration lancée');
+    vibrer(15);
+  }
+});
+$('#btn-calib-stop').addEventListener('click', () => {
+  if (envoyerTexte('mode arret')) {
+    poserTexte($('#calib-etat'), 'Arrêtée');
+    $('#btn-calib-stop').disabled = true;
+    $('#btn-calib-lancer').disabled = false;
+  }
+});
+$('#btn-autotest-court').addEventListener('click', () => {
+  S.autotestResultats = [];
+  rendreAutotest();
+  if (envoyerTexte('mode autotest')) { poserTexte($('#autotest-etat'), 'En cours…'); vibrer(15); }
+});
+$('#btn-autotest-roues').addEventListener('click', () => {
+  S.autotestResultats = [];
+  rendreAutotest();
+  if (envoyerTexte('mode autotest 1')) { poserTexte($('#autotest-etat'), 'En cours…'); vibrer(15); }
 });
 
 // ============================================================================
@@ -1291,7 +1580,7 @@ function afficherMateriel() {
     detailsEl.textContent = '';
     return;
   }
-  const diag = diagnosticMateriel(S.materiel, S.acquisition, S.profils);
+  const diag = diagnosticMateriel(S.materiel, S.acquisition, S.profils, { acqBrut: S.acqBrut, nav: S.nav, liaison: S.liaison });
   poserTexte($('#b-materiel'), diag.resume || 'Réponse du rover illisible.');
   boite.classList.toggle('inquietant', diag.alerte);
   detailsEl.textContent = '';
@@ -1315,6 +1604,7 @@ $('#btn-materiel').addEventListener('click', () => {
   if (!S.transport?.connecte) { poserTexte($('#b-materiel'), 'Pas de liaison avec le rover.'); return; }
   poserTexte($('#b-materiel'), 'Demande en cours…');
   envoyerTexte('materiel', { silencieux: true });
+  if (S.profil.famille === 'rust') envoyerTexte('liaison', { silencieux: true });
 });
 
 // -- Essai « qualité de la liaison » (50 trames écho 0x12 ou PING) --
@@ -1350,9 +1640,125 @@ function afficherRetour(sel, texte, niveau = '') {
 function reinitialiserRetoursReglages() {
   afficherRetour('#params-retour', '');
   afficherRetour('#rover-nom-retour', '');
+  afficherRetour('#maj-retour', '');
   $('#rover-nom-aide').hidden = true;
+  $('#maj-progres').hidden = true;
+  $('#maj-barre').style.width = '0%';
   fermerConfirmationUsine();
 }
+
+function majAffichageMajRover() {
+  const connecte = !!S.transport?.connecte;
+  const dispo = connecte && S.profil.capacites.majSansFil;
+  if (!connecte) {
+    poserTexte($('#maj-etat-ligne'), 'Connectez-vous au rover pour envoyer une mise à jour .maj.');
+  } else if (!dispo) {
+    poserTexte($('#maj-etat-ligne'), 'Mise à jour sans fil absente sur ce firmware.');
+  } else if (S.majEtatRover) {
+    const e = S.majEtatRover;
+    const crcTxt = S.majBrut?.crc ?? e.crc ?? '—';
+    poserTexte($('#maj-etat-ligne'), `État du chargeur : etat=${e.etat ?? '?'}, taille=${e.taille ?? 0} o, crc=${crcTxt}.`);
+  } else {
+    poserTexte($('#maj-etat-ligne'), 'Prêt : choisissez un fichier .maj (brut v2 pour Rust, compressé pour MicroPython).');
+  }
+  $('#maj-fichier').disabled = pilotageMaj.enCours;
+  $('#btn-maj-lancer').disabled = !dispo || !S.paquetMaj || pilotageMaj.enCours;
+  $('#btn-maj-annuler').hidden = !pilotageMaj.enCours;
+  $('#btn-redemarrer').disabled = !connecte || pilotageMaj.enCours;
+}
+
+function verifierMajApresReconnexion(force = false) {
+  if (!S.majAttenteVerif) return;
+  if (!force && (!S.infoRecue || !S.majEtatRover)) return;
+  clearTimeout(timerVerifMaj);
+  const res = verifierApresRedemarrage({
+    entete: S.majAttenteVerif,
+    majLigne: S.majEtatRover,
+    majBrut: S.majBrut,
+    materiel: S.materiel,
+    version: S.profil.version,
+  });
+  if (res.statut === 'attente' && !force) return;
+  S.majAttenteVerif = null;
+  const niv = res.statut === 'ok' ? 'ok' : 'err';
+  afficherRetour('#maj-retour', res.message, niv);
+  noter(niv === 'ok' ? 'evt' : 'err', res.message);
+}
+
+$('#maj-fichier').addEventListener('change', async (ev) => {
+  const fichier = ev.target.files?.[0];
+  S.paquetMaj = null;
+  if (!fichier) { $('#maj-info').hidden = true; majAffichageMajRover(); return; }
+  try {
+    const octets = new Uint8Array(await fichier.arrayBuffer());
+    const entete = lireEnteteMaj(octets);
+    S.paquetMaj = { octets, entete, nom: fichier.name };
+    const carteTxt = entete.carte ? ` · carte ${entete.carte}` : '';
+    const crcHex = entete.crcBrut.toString(16).padStart(8, '0');
+    const compat = verifierCompatibilitePaquet(entete, { famille: S.profil.famille, carteCible: S.info?.carte ?? '' });
+    $('#maj-info').hidden = false;
+    poserTexte($('#maj-info'), `${fichier.name} — format v${entete.version}, ${Math.round(entete.tailleBrute / 1024)} Ko, CRC ${crcHex}${carteTxt}${compat.ok ? '' : ` · ⚠ ${compat.message}`}`);
+    if (!compat.ok) afficherRetour('#maj-retour', compat.message, 'err');
+    else afficherRetour('#maj-retour', '');
+  } catch (err) {
+    $('#maj-info').hidden = true;
+    afficherRetour('#maj-retour', err.message || 'Fichier .maj invalide', 'err');
+  }
+  majAffichageMajRover();
+});
+
+$('#btn-maj-lancer').addEventListener('click', async () => {
+  if (!S.transport?.connecte || !S.paquetMaj) return;
+  const compat = verifierCompatibilitePaquet(S.paquetMaj.entete, { famille: S.profil.famille, carteCible: S.info?.carte ?? '' });
+  if (!compat.ok) { afficherRetour('#maj-retour', compat.message, 'err'); return; }
+  if (S.urgence.actif) { afficherRetour('#maj-retour', "Désactivez l'arrêt d'urgence avant la mise à jour.", 'err'); return; }
+  const enMouvement = () => !!(S.etat?.flags?.mouvement || (S.etat?.vitesse ?? 0) > 2);
+  if (enMouvement()) {
+    afficherRetour('#maj-retour', 'Arrêtez complètement le rover avant de lancer la mise à jour.', 'err');
+    return;
+  }
+  $('#maj-progres').hidden = false;
+  $('#maj-barre').style.width = '0%';
+  poserTexte($('#maj-progres-texte'), '0 %');
+  afficherRetour('#maj-retour', 'Envoi de la mise à jour…');
+  majAffichageMajRover();
+  const PHASES = {
+    debut: 'Initialisation…', envoi: 'Transfert…', verification: 'Vérification du paquet…',
+    installation: 'Programmation…', redemarrage: 'Redémarrage du rover…',
+  };
+  try {
+    S.majAttenteVerif = S.paquetMaj.entete;
+    const tailleBloc = tailleBlocPourMtu(S.transport.mtu);
+    const entete = await pilotageMaj.executer(S.paquetMaj.octets, {
+      tailleBloc,
+      enMouvement,
+      surProgres: ({ phase, confirme, total, debitKoS }) => {
+        const pct = total > 0 ? Math.min(100, Math.round((confirme * 100) / total)) : 0;
+        $('#maj-barre').style.width = `${pct}%`;
+        poserTexte($('#maj-progres-texte'), `${pct} %`);
+        const deb = debitKoS > 0 ? ` (${debitKoS.toFixed(1).replace('.', ',')} Ko/s)` : '';
+        afficherRetour('#maj-retour', `${PHASES[phase] ?? 'Mise à jour…'}${deb}`);
+      },
+    });
+    S.majAttenteVerif = entete;
+    afficherRetour('#maj-retour', 'Paquet installé : redémarrage du rover en cours…', 'ok');
+  } catch (err) {
+    S.majAttenteVerif = null;
+    afficherRetour('#maj-retour', err.message || 'Échec de la mise à jour', 'err');
+  } finally {
+    majAffichageMajRover();
+  }
+});
+
+$('#btn-maj-annuler').addEventListener('click', () => {
+  pilotageMaj.annuler();
+  majAffichageMajRover();
+});
+
+$('#btn-redemarrer').addEventListener('click', () => {
+  if (!S.transport?.connecte) { afficherToast('err', 'Pas de liaison avec le rover'); return; }
+  if (envoyerTexte('redemarrer')) afficherRetour('#maj-retour', 'Redémarrage demandé…');
+});
 function fermerConfirmationUsine() {
   $('#btn-params-usine').hidden = false;
   $('#btn-params-usine-confirmer').hidden = true;

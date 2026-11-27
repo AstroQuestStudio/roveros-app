@@ -236,6 +236,45 @@
           <span>Côté du carré et de la glisse <output id="cote-val" class="chiffres">0,5 m</output></span>
           <input type="range" id="cote" min="0.2" max="1.2" step="0.1" value="0.5" aria-label="Côté en mètres">
         </label>
+        <label class="reglage-ligne" id="modes-course" hidden>
+          <span>Distance de la course <output id="course-val" class="chiffres">3,0 m</output></span>
+          <input type="range" id="course-dist" min="0.5" max="10" step="0.5" value="3.0" aria-label="Distance en mètres">
+        </label>
+
+        <section class="bloc-outil" id="calib-boite" hidden aria-label="Calibration guidée">
+          <div class="bloc-outil-tete">
+            <h2>Calibration guidée</h2>
+            <span class="petit" id="calib-etat">Prête</span>
+          </div>
+          <p class="aide">Posez le rover dans un espace libre (1 m autour). Choisissez une étape ou lancez la séquence complète.</p>
+          <div class="calib-ligne">
+            <select id="calib-etape" class="calib-select" aria-label="Étape de calibration">
+              <option value="">Complète (tout)</option>
+              <option value="court">Rapide (court)</option>
+              <option value="tpm">Roues : tours par mètre (tpm)</option>
+              <option value="bras">Bras de levier (bras)</option>
+              <option value="lat">Dérive latérale (lat)</option>
+              <option value="moteur">Moteurs : seuil et gain (moteur)</option>
+              <option value="accel">Accélération maximale (accel)</option>
+            </select>
+            <button type="button" class="bouton plein" id="btn-calib-lancer">Lancer</button>
+            <button type="button" class="bouton" id="btn-calib-stop" disabled>Arrêter</button>
+          </div>
+          <ul id="calib-journal" class="journal journal-compact" hidden></ul>
+        </section>
+
+        <section class="bloc-outil" id="autotest-boite" hidden aria-label="Autotest des organes">
+          <div class="bloc-outil-tete">
+            <h2>Autotest des organes</h2>
+            <span class="petit" id="autotest-etat">Prêt</span>
+          </div>
+          <p class="aide">Vérifie les bus, capteurs et mémoire (et les moteurs si les roues sont dégagées).</p>
+          <div class="rangee-boutons">
+            <button type="button" class="bouton plein" id="btn-autotest-court">Vérifier les organes</button>
+            <button type="button" class="bouton" id="btn-autotest-roues">Tester aussi les roues</button>
+          </div>
+          <ul id="autotest-liste" class="autotest-liste" hidden></ul>
+        </section>
       </div>
     </section>
 
@@ -293,6 +332,25 @@
             <strong id="r-firmware-nom">Firmware inconnu</strong>
             <span class="petit" id="r-firmware-maj">Mise à jour sans fil : —</span>
           </div>
+        </div>
+
+        <h2>Mise à jour sans fil <span class="badge-indispo" id="maj-badge-indispo" hidden>Pas sur ce firmware</span></h2>
+        <div class="bloc-outil" id="bloc-maj-firmware">
+          <p class="aide" id="maj-etat-ligne">Choisissez un fichier <code>.maj</code> à envoyer au rover (brut v2 pour Rust, compressé pour MicroPython).</p>
+          <div class="maj-fichier-ligne">
+            <input type="file" id="maj-fichier" accept=".maj,.bin,application/octet-stream" aria-label="Fichier de mise à jour (.maj)">
+          </div>
+          <p class="aide maj-info" id="maj-info" hidden></p>
+          <div class="maj-progres" id="maj-progres" hidden>
+            <div class="maj-barre-fond"><div class="maj-barre" id="maj-barre"></div></div>
+            <span class="chiffres petit" id="maj-progres-texte">0 %</span>
+          </div>
+          <div class="rangee-boutons">
+            <button type="button" class="bouton plein" id="btn-maj-lancer" disabled>Envoyer la mise à jour</button>
+            <button type="button" class="bouton" id="btn-maj-annuler" hidden>Annuler</button>
+            <button type="button" class="bouton" id="btn-redemarrer">Redémarrer le rover</button>
+          </div>
+          <p class="retour-rover" id="maj-retour" hidden></p>
         </div>
         <div class="rangee-boutons">
           <button type="button" class="bouton" data-vue-lien="bord"><span class="ico-slot" data-icone="bord"></span>Tableau de bord</button>
@@ -485,6 +543,7 @@
     <div class="rangee-boutons jr-actions">
       <button type="button" class="bouton plein" id="jr-exporter">Enregistrer le fichier</button>
       <button type="button" class="bouton" id="jr-partager" hidden>Partager</button>
+      <button type="button" class="bouton" id="jr-relever" hidden>Relever le journal du rover</button>
       <button type="button" class="bouton" id="jr-demo" hidden>Simuler un incident</button>
     </div>
     <p class="aide jr-stats chiffres" id="jr-stats"></p>
@@ -492,6 +551,11 @@
     <ul id="jr-resume" class="journal"></ul>
     <h3 class="jr-sous">Repères (« Marquer »)</h3>
     <ul id="jr-reperes" class="journal"></ul>
+    <div id="jr-rover-bloc" hidden>
+      <h3 class="jr-sous">Journal du rover</h3>
+      <p class="aide jr-stats chiffres" id="jr-rover-stats"></p>
+      <ul id="jr-rover-liste" class="journal"></ul>
+    </div>
     <h3 class="jr-sous">Événements</h3>
     <ul id="journal-liste" class="journal"></ul>
     <p class="etat-vide" id="journal-vide">Rien à signaler pour l'instant.</p>

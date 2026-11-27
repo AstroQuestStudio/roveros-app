@@ -862,3 +862,44 @@ button.choix:active { transform: scale(0.99); }
 .retour-rover.ok { border-color: var(--positif); color: var(--positif); }
 .retour-rover.err { border-color: var(--negatif); color: #ffb4ae; }
 .params-actions { margin-bottom: 8px; }
+
+/* ================= Outils Rust : calibration, autotest, MAJ OTA, journal rover ================= */
+
+.bloc-outil {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 12px 14px;
+  border-radius: 14px; background: var(--s2); border: 1px solid var(--ligne-2); min-width: 0;
+}
+.bloc-outil h2 { margin: 0; font-size: 16px; }
+.bloc-outil-tete { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+
+.calib-ligne { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.calib-select {
+  flex: 1 1 190px; min-width: 0; min-height: 44px; padding: 8px 10px;
+  border-radius: 10px; border: 1px solid var(--ligne-2); background: var(--s3); color: var(--t1); font: inherit;
+}
+
+.journal-compact { max-height: 180px; overflow-y: auto; margin-top: 4px; }
+.autotest-liste {
+  display: flex; flex-direction: column; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none;
+}
+.autotest-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 10px; background: var(--s3); border: 1px solid var(--ligne); font-size: 14px;
+}
+.autotest-item.ok { border-color: rgba(45, 212, 160, 0.4); }
+.autotest-item.ko { border-color: var(--negatif); color: #ffb4ae; }
+.autotest-item.absent { border-color: rgba(245, 168, 58, 0.45); color: #ffd08a; }
+
+.maj-fichier-ligne input[type="file"] {
+  width: 100%; max-width: 100%; font-size: 14px; color: var(--t2);
+}
+.maj-info { margin: 0; overflow-wrap: anywhere; }
+.maj-progres { display: flex; align-items: center; gap: 10px; }
+.maj-barre-fond {
+  flex: 1 1 auto; height: 8px; border-radius: 999px; background: var(--s3); overflow: hidden;
+  border: 1px solid var(--ligne);
+}
+.maj-barre {
+  width: 0%; height: 100%; background: var(--accent); transition: width 120ms linear;
+}
+#maj-progres-texte { min-width: 44px; text-align: right; }
