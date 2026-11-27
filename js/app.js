@@ -10,7 +10,7 @@ import { TransportDemo, alimenterDemoJournal } from './transport-demo.js';
 import { VueCarte, formaterDistance } from './carte.js';
 import { Manette, Clavier, Pilote } from './manettes.js';
 import { Inclinaison } from './inclinaison.js';
-import { Reglages, validerNomRover } from './reglages.js';
+import { Reglages, validerNomRover, lirePwmMax, commandePwmMax } from './reglages.js';
 import { TableauDeBord, SuiviTension, barresSignal } from './bord.js';
 import { creerQr, dessinerQr } from './qr.js';
 import { icone, MODES_FR, libelleMode } from './icones.js';
@@ -559,11 +559,12 @@ function surEtat(e) {
   const precedent = S.etat;
   S.etat = e;
   S.tEtat = performance.now();
-  journal.noterEtat(S.tEtat, e);
+  journal.noterEtat(S.tEtat, e); // le journal reçoit la trame brute : tous les drapeaux, même les passagers
+  const eAffiche = diagnostic.filtrer(e, S.tEtat); // ligne d'état et liste des drapeaux : sans les défauts passagers trop courts
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
   const etatTension = suiviTension.actualiser(e, S.tEtat);
-  if (S.vue === 'bord') bord.majEtat(e, S.modes, carte.positionAbsolue(e) ?? undefined, suiviTension.minimum);
+  if (S.vue === 'bord') bord.majEtat(eAffiche, S.modes, carte.positionAbsolue(e) ?? undefined, suiviTension.minimum);
   if (e.rssi) poserDonnee($('#liaison-signal'), 'barres', barresSignal(e.rssi));
   majBatterieEntete(e, etatTension);
   const nomMode = e.comportement === 0 && !carte.chemin.length ? 'Manuel' : (S.modes[e.comportement] ? libelleMode(S.modes[e.comportement]) : e.comportement === 0 ? 'En route' : `Mode ${e.comportement}`);
@@ -578,7 +579,7 @@ function surEtat(e) {
   if (S.modes[e.comportement] === 'patrouille') S.enPatrouille = true;
   else if (S.enPatrouille && !patrouille.actif) { S.enPatrouille = false; patrouille.effacer(); majPatrouille(); } // patrouille terminée : on retire les points
   surfaceModeActif(e);
-  majLigneEtat(e);
+  majLigneEtat(eAffiche);
   if (e.flags.arrive && !(precedent?.flags.arrive)) carte.retirerMarqueur();
   confirmerUrgence(e);
   afficherDetailLiaison();
@@ -1451,6 +1452,7 @@ function majSecurites() {
       ? "Sécurités obstacles À MOITIÉ COUPÉES : le rover freine moins bien devant un mur"
       : "MODE RADIOCOMMANDE : sécurités coupées, aucun freinage devant un mur");
   }
+  majPwm();
   const swRef = $('#sw-reflexe');
   const valReflexe = connecte ? reglages.params.get('reflexe')?.valeur : undefined;
   const refDispo = typeof valReflexe === 'number';
@@ -1464,8 +1466,24 @@ function majSecurites() {
       : 'Coupé : le rover ne freine plus tout seul devant un obstacle.');
 }
 
+// -- Puissance des moteurs (param pwm_max) : lue à la connexion, envoyée au relâchement du curseur --
+function majPwm() {
+  const curseur = $('#pwm-max');
+  const v = S.transport?.connecte ? lirePwmMax(reglages.params) : null;
+  if (v !== null && document.activeElement !== curseur) curseur.value = String(v);
+  curseur.disabled = v === null;
+  poserTexte($('#pwm-val'), v === null ? '—' : String(v));
+}
+$('#pwm-max').addEventListener('input', () => poserTexte($('#pwm-val'), $('#pwm-max').value));
+$('#pwm-max').addEventListener('change', () => {
+  if (!S.transport?.connecte) return;
+  envoyerTexte(commandePwmMax($('#pwm-max').value), { silencieux: true });
+  setTimeout(() => envoyerTexte('params', { silencieux: true }), 250); // on relit la valeur réelle
+});
+
 /** Un paramètre arrive du rover : on s'en sert pour afficher l'état réel, et pour la remise en service à la connexion. */
 function surParamRecu(p) {
+  if (p.nom === 'pwm_max') { majPwm(); return; }
   if (p.nom !== 'reflexe' && p.nom !== 'carte_on') return;
   if (S.verifSecurites && p.valeur < 0.5) {
     envoyerTexte(`param ${p.nom} 1`, { silencieux: true });

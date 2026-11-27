@@ -3,7 +3,7 @@
 // rafraîchit le cache en arrière-plan quand le réseau répond (la version à jour sert à l'ouverture suivante).
 // Quand vous modifiez un fichier, changez VERSION ci-dessous pour renouveler le cache.
 
-const VERSION = 'roveros-v11';
+const VERSION = 'roveros-v12';
 const FICHIERS = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/bord.js', 'js/carte.js', 'js/faux-rover.js', 'js/firmware.js', 'js/icones.js', 'js/inclinaison.js',

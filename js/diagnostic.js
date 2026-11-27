@@ -178,6 +178,42 @@ export function phraseEtat(e, ctx = {}) {
 /** Texte court pour une notification, d'après la clé de la phrase. */
 const NOTIFIABLES = new Set(['driver_ko', 'souleve', 'choc', 'blocage', 'garde', 'obstacle', 'laisse', 'imu_ko', 'aveugle', 'patine', 'batterie', 'retard']);
 
+// ---------- Défauts passagers ----------
+
+/**
+ * Drapeaux qui retombent d'eux-mêmes quand la carte moteurs décroche (quelques dizaines de ms).
+ * Ils ne sont affichés qu'après DUREE_DEFAUT_PASSAGER_MS d'affilée. L'arrêt d'urgence, la batterie
+ * faible et la garde restent immédiats (ils ne sont pas dans cette liste).
+ */
+export const DEFAUTS_PASSAGERS = ['driver_ko', 'blocage', 'patine', 'souleve', 'choc', 'imu_ko'];
+export const DUREE_DEFAUT_PASSAGER_MS = 400;
+
+/**
+ * Pur : quels défauts passagers afficher à l'instant `maintenant`.
+ * @param flags       drapeaux de la trame (nom -> booléen)
+ * @param leves       Map nom -> instant (ms) où le drapeau s'est levé, telle que rendue par l'appel précédent
+ * @param maintenant  instant de réception de la trame (ms)
+ * @param duree       durée minimale d'affilée avant affichage (ms)
+ * @returns { flags: drapeaux à afficher, leves: Map à garder pour la trame suivante,
+ *            masques: noms cachés cette trame, courts: { nom, duree } des défauts retombés avant `duree` }
+ */
+export function filtrerDefautsPassagers(flags = {}, leves = new Map(), maintenant = 0, duree = DUREE_DEFAUT_PASSAGER_MS) {
+  const affiches = { ...flags };
+  const nouvelles = new Map();
+  const masques = [];
+  for (const nom of DEFAUTS_PASSAGERS) {
+    if (!flags[nom]) continue;
+    const debut = leves.has(nom) ? leves.get(nom) : maintenant;
+    nouvelles.set(nom, debut);
+    if (maintenant - debut < duree) { affiches[nom] = false; masques.push(nom); }
+  }
+  const courts = [];
+  for (const [nom, debut] of leves) {
+    if (!nouvelles.has(nom) && debut !== undefined && maintenant - debut < duree) courts.push({ nom, duree: maintenant - debut });
+  }
+  return { flags: affiches, leves: nouvelles, masques, courts };
+}
+
 export class Diagnostic {
   /**
    * @param {object} o  tramesLigne : trames identiques avant de changer la ligne (2 ≈ 0,25 s)
@@ -192,11 +228,27 @@ export class Diagnostic {
     this._candidat = null;
     this._compteCandidat = 0;
     this._compteCle = new Map();
+    this._leves = new Map(); // défauts passagers levés, et depuis quand (voir filtrerDefautsPassagers)
+    this.courts = new Map(); // nom -> nombre de défauts passagers retombés avant DUREE_DEFAUT_PASSAGER_MS (non affichés)
   }
 
   reinitialiser() {
     this.ligne = { texte: 'Pas de rover connecté', niveau: 'neutre', cle: 'liaison' };
     this._candidat = null; this._compteCandidat = 0; this._compteCle.clear();
+    this._leves.clear(); this.courts.clear();
+  }
+
+  /**
+   * Retire de la trame les défauts passagers pas encore affichables (moins de DUREE_DEFAUT_PASSAGER_MS).
+   * À appeler une fois par trame, avant `traiter` et l'affichage des drapeaux. Le journal reçoit la trame brute.
+   * @returns la trame à afficher (la même si rien à retirer)
+   */
+  filtrer(e, maintenant = performance.now()) {
+    if (!e || !e.flags) return e;
+    const r = filtrerDefautsPassagers(e.flags, this._leves, maintenant);
+    this._leves = r.leves;
+    for (const c of r.courts) this.courts.set(c.nom, (this.courts.get(c.nom) ?? 0) + 1);
+    return r.masques.length ? { ...e, flags: r.flags } : e;
   }
 
   /**

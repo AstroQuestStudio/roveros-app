@@ -203,3 +203,20 @@ export class Reglages {
     if (enBas) this.zoneConsole.scrollTop = this.zoneConsole.scrollHeight;
   }
 }
+
+/** Puissance maximale des moteurs (param pwm_max du rover, 500 à 3600 ; 3200 d'origine). Le curseur va de 1200 à 3200. */
+export const PWM_MIN = 1200;
+export const PWM_MAX = 3200;
+export const PWM_PAS = 100;
+
+/** Valeur de pwm_max lue dans les paramètres reçus du rover (Map nom -> { valeur }), ou null si absente. */
+export function lirePwmMax(params) {
+  const v = params?.get?.('pwm_max')?.valeur;
+  return typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null;
+}
+
+/** Commande envoyée au rover au relâchement du curseur. */
+export function commandePwmMax(valeur) {
+  const v = Math.min(PWM_MAX, Math.max(PWM_MIN, Math.round(Number(valeur) / PWM_PAS) * PWM_PAS));
+  return `param pwm_max ${v}`;
+}

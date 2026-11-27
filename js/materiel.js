@@ -139,6 +139,34 @@ export function traduireBus(index, acquisition = {}, acqBrut = null) {
   };
 }
 
+/**
+ * Traduit `sal0=a/b/c` (acquisition) : a décrochages de la carte moteurs depuis la remise à zéro,
+ * b d'entre eux de 50 ms ou plus, c = le plus long en échanges de 5 ms. `gel0` : gels du bus.
+ * Champs absents (ancien firmware) : null.
+ */
+export function traduireDecrochages(acquisition = null) {
+  if (!acquisition || typeof acquisition !== 'object') return null;
+  const brut = acquisition.sal0;
+  const gel = acquisition.gel0 === undefined ? null : Number.parseInt(String(acquisition.gel0), 10);
+  const [a, b, c] = brut === undefined ? [] : String(brut).split('/').map((x) => Number.parseInt(x, 10));
+  if (!Number.isFinite(a) && !Number.isFinite(gel)) return null;
+  const phrases = [];
+  if (Number.isFinite(a)) {
+    if (a === 0) {
+      phrases.push('Aucun décrochage de la carte moteurs');
+    } else {
+      const longs = Number.isFinite(b) ? b : 0;
+      const plusLong = Number.isFinite(c) ? c * 5 : 0;
+      const detail = longs > 0
+        ? `dont ${longs} de plus de 50 ms : le rover s'est arrêté`
+        : 'tous de moins de 50 ms';
+      phrases.push(`${a} ${pluriel(a, 'décrochage', 'décrochages')} de la carte moteurs, ${detail}, le plus long ${plusLong} ms`);
+    }
+  }
+  if (Number.isFinite(gel) && gel > 0) phrases.push(`${gel} ${pluriel(gel, 'gel', 'gels')} du bus de la carte moteurs`);
+  return { phrases, alerte: Number.isFinite(b) && b > 0 };
+}
+
 /** « calcul 0,7 ms, au pire 2,0 ms, aucun retard, mémoire libre 72 Ko » */
 export function phraseMateriel(v) {
   if (!v || typeof v !== 'object') return '';
@@ -201,6 +229,8 @@ export function diagnosticMateriel(v, acquisition = null, profils = [], extra = 
   if (raz) {
     details.push({ cle: 'raz', libelle: 'Dernier redémarrage', valeur: raz.libelle, alerte: raz.alerte });
   }
+  const decrochages = traduireDecrochages(acquisition);
+  if (decrochages) for (const p of decrochages.phrases) details.push({ cle: 'decrochages', libelle: 'Carte moteurs', valeur: p, alerte: decrochages.alerte });
 
   if (Number.isFinite(v.calcul)) {
     const maxTxt = Number.isFinite(v.calcul_max) ? ` (max ${formaterUs(v.calcul_max)})` : '';
