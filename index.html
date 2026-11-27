@@ -340,6 +340,21 @@
           </div>
           <ul id="autotest-liste" class="autotest-liste" hidden></ul>
         </section>
+
+        <section class="bloc-outil" id="demo-boite" hidden aria-label="Démo">
+          <div class="bloc-outil-tete">
+            <h2>Démo</h2>
+            <span class="petit" id="demo-etat">Prête</span>
+          </div>
+          <p class="aide">Posez un objet entre 35 et 75 cm devant le rover. Il lui faut 65 cm libres autour de lui et de la place derrière l'objet : il tourne autour.</p>
+          <div class="rangee-boutons">
+            <button type="button" class="bouton plein" id="btn-demo-lancer" disabled>Lancer la démo</button>
+          </div>
+          <p class="aide">Pour l'arrêter, utilisez le bouton d'arrêt d'urgence.</p>
+          <p id="demo-phrase" class="demo-phrase" aria-live="polite"></p>
+          <p id="demo-detail" class="petit"></p>
+          <p id="demo-resultat" class="petit chiffres"></p>
+        </section>
       </div>
     </section>
 

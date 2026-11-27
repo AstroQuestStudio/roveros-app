@@ -25,7 +25,7 @@ import {
 
 export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'patrouille', 'arret'];
 // rust100/src/systeme.rs:446
-export const MODES_RUST = ['manuel', 'aller', 'course', 'explorer', 'base', 'patrouille', 'chien', 'calibrer', 'autotest'];
+export const MODES_RUST = ['manuel', 'aller', 'course', 'explorer', 'base', 'patrouille', 'chien', 'calibrer', 'autotest', 'demo'];
 export const MODES_RUST_ANCIEN = ['manuel'];
 export const MODES_MICROPYTHON = ['manuel', 'base', 'autotest', 'calibrer', 'chien', 'danse', 'explorer', 'glisse', 'aller', 'slalom', 'mur', 'carre', 'patrouille', 'course'];
 
@@ -677,7 +677,9 @@ export class FauxRover {
 
   /** Arrête tout mouvement et tout comportement (STOP, urgence, manette qui reprend la main). */
   annuler() {
-    if (this.firmware === 'rust' && (this.mode !== 'manuel' || this.but)) {
+    if (this.firmware === 'rust' && this.mode === 'demo') {
+      this.evt('demo arrêtée : arrêt demandé'); // fausse démo : arrêt par le STOP existant
+    } else if (this.firmware === 'rust' && (this.mode !== 'manuel' || this.but)) {
       this.evt('objectif abandonné'); // rust100/src/systeme.rs:497
     }
     this.mode = 'manuel'; this.etat = {}; this.but = null;
@@ -786,6 +788,10 @@ export class FauxRover {
       this.evt(this.etat.mouvement
         ? 'autotest : je vérifie les organes et les roues'
         : 'autotest : je vérifie les organes (les roues ne bougent pas)'); // navigateur/src/autotest.rs:101-105
+      return;
+    }
+    if (nom === 'demo' && this.firmware === 'rust') {
+      this.texte('Mode démo : je vérifie que la place est libre'); // fausse démo : vérification sur 2 s, puis tour sur soi
       return;
     }
     if (nom === 'carre' || nom === 'glisse') this.etat.etapes = this.etapesFigure(nom);
@@ -1086,6 +1092,7 @@ export class FauxRover {
         return { vx: 0, vy: 0, w: 1.2 };
       }
       case 'autotest': return this.comportementAutotestRust(tm);
+      case 'demo': return this.comportementDemoRust(tm);
       case 'mur': return this.comportementMur(tm, vmax);
       default: return nul;
     }
@@ -1230,6 +1237,28 @@ export class FauxRover {
       this.mode = 'manuel'; this.etat = {}; this.viderChemin();
     }
     return { vx: 0, vy: 0, w: 0 };
+  }
+
+  /** Fausse démo accélérée (Rust) : vérification sur 2 s, refus si un mur est à moins de 65 cm, sinon tour sur soi. */
+  comportementDemoRust(tm) {
+    const nul = { vx: 0, vy: 0, w: 0 };
+    if (this.etat.verifie === undefined && tm >= 2) {
+      const devant = lancer(this.monde, this.x, this.y, Math.sin(this.cap), Math.cos(this.cap));
+      this.etat.verifie = devant >= 0.65;
+      if (!this.etat.verifie) {
+        this.err("demo : devant, c'est un mur et pas un objet");
+        this.mode = 'manuel'; this.etat = {};
+        return nul;
+      }
+      this.texte('demo : place libre, objet à 0.50 m');
+    }
+    if (this.etat.verifie === undefined) return nul;
+    if (tm >= 20) {
+      this.evt('demo finie : 20 s, 3.0 m'); // valeurs fixes de la fausse démo
+      this.mode = 'manuel'; this.etat = {};
+      return nul;
+    }
+    return { vx: 0, vy: 0, w: 0.8 };
   }
 
   comportementMur(tm, vmax) {
