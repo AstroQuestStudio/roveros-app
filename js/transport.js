@@ -79,7 +79,7 @@ export class Transport extends EventTarget {
       const i = this._file.findIndex((e) => e.cle === cle);
       if (i >= 0) { this._file.splice(i, 1); this.jetees++; }
     }
-    const element = { trame, cle, tentatives: 0, t: performance.now() };
+    const element = { trame, cle, tentatives: 0, t: performance.now(), rapide: !!options.rapide && type !== T.MANETTE };
     if (priorite) this._file.unshift(element);
     else if (type === T.MANETTE) {
       // Les consignes de pilotage passent avant les textes/pings en attente (mais après STOP/URGENCE).
@@ -108,7 +108,8 @@ export class Transport extends EventTarget {
 
   _pomper() {
     if (this._minuterie !== null || this._ecritureEnCours || this._file.length === 0) return;
-    const attente = Math.max(0, this._dernierEnvoi + INTERVALLE_MIN_MS - performance.now());
+    const suivant = this._file[0];
+    const attente = suivant?.rapide ? 0 : Math.max(0, this._dernierEnvoi + INTERVALLE_MIN_MS - performance.now());
     const lancer = async () => {
       this._minuterie = null;
       if (this._ecritureEnCours) return; // l'écriture en cours relancera la pompe en finissant

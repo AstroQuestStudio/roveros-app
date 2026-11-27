@@ -32,7 +32,11 @@ export const T = {
   TEXTE_ROVER: 0x85,
   PONG: 0x91,
   ECHO_RETOUR: 0x92,
-  // mise à jour du firmware (0xA0) : elle se fait depuis le PC, l'application ignore ces trames
+  // mise à jour du firmware (0x20..0x23 -> 0xA0)
+  MAJ_DEBUT: 0x20,
+  MAJ_BLOC: 0x21,
+  MAJ_FIN: 0x22,
+  MAJ_INSTALLER: 0x23,
   MAJ: 0xA0,
   // carte sans limite : origine de la fenêtre glissante de la carte (voir docs/CARTE_SANS_LIMITE.md du dépôt roveros)
   ORIGINE: 0x86,
@@ -149,6 +153,39 @@ export function encoderEcho(donnees = new Uint8Array(0)) {
   return t;
 }
 
+/** MAJ_DEBUT (0x20) : taille totale du paquet (u32) + CRC-32 du paquet (u32). */
+export function encoderMajDebut(taille, crc) {
+  const t = new Uint8Array(9);
+  const vue = new DataView(t.buffer);
+  t[0] = T.MAJ_DEBUT;
+  vue.setUint32(1, taille >>> 0, true);
+  vue.setUint32(5, crc >>> 0, true);
+  return t;
+}
+
+/** MAJ_BLOC (0x21) : position (u32) + octets du bloc. */
+export function encoderMajBloc(position, donnees) {
+  const o = versOctets(donnees);
+  const t = new Uint8Array(5 + o.length);
+  const vue = new DataView(t.buffer);
+  t[0] = T.MAJ_BLOC;
+  vue.setUint32(1, position >>> 0, true);
+  t.set(o, 5);
+  return t;
+}
+
+/** MAJ_FIN (0x22) : fin d'envoi, demande la vérification du paquet. */
+export const encoderMajFin = () => Uint8Array.of(T.MAJ_FIN);
+
+/** MAJ_INSTALLER (0x23) : lance l'installation du paquet vérifié (CRC-32 attendu). */
+export function encoderMajInstaller(crc) {
+  const t = new Uint8Array(5);
+  const vue = new DataView(t.buffer);
+  t[0] = T.MAJ_INSTALLER;
+  vue.setUint32(1, crc >>> 0, true);
+  return t;
+}
+
 // ---------- Rover -> téléphone : décodage ----------
 
 /**
@@ -170,7 +207,7 @@ export function decoder(donnees) {
       case T.PONG: return o.length >= 2 ? { type: 'pong', n: o[1] } : null;
       case T.ECHO_RETOUR: return { type: 'echo', donnees: o.slice(1) };
       case T.ORIGINE: return decoderOrigine(o, vue);
-      case T.MAJ: return { type: 'maj' }; // ignorée proprement (jamais une erreur, jamais de texte)
+      case T.MAJ: return o.length >= 6 ? { type: 'maj', etat: o[1], valeur: vue.getUint32(2, true) } : { type: 'maj' };
       default: return { type: 'inconnu', code: o[0], longueur: o.length };
     }
   } catch {
@@ -206,20 +243,23 @@ function decoderEtat(o, vue) {
   };
 }
 
-/** ORIGINE (0x86) : ox i32, oy i32 (cases du monde), version u8, cellule u16 (mm). */
+/** ORIGINE (0x86) : ox i32, oy i32 (cases du monde), version u8, cellule u16 (mm), [carte u8]. */
 function decoderOrigine(o, vue) {
   if (o.length < 12) return null;
-  return { type: 'origine', ox: vue.getInt32(1, true), oy: vue.getInt32(5, true), version: o[9], cellule: vue.getUint16(10, true) };
+  const r = { type: 'origine', ox: vue.getInt32(1, true), oy: vue.getInt32(5, true), version: o[9], cellule: vue.getUint16(10, true) };
+  if (o.length >= 13) r.carte = o[12];
+  return r;
 }
 
 /** Construit une trame ORIGINE (utilisée par la démo et les tests). */
-export function encoderOrigine({ ox, oy, version, cellule }) {
-  const t = new Uint8Array(12);
+export function encoderOrigine({ ox, oy, version, cellule, carte }) {
+  const t = new Uint8Array(carte === undefined ? 12 : 13);
   const vue = new DataView(t.buffer);
   t[0] = T.ORIGINE;
   vue.setInt32(1, ox, true); vue.setInt32(5, oy, true);
   t[9] = version & 0xff;
   vue.setUint16(10, cellule, true);
+  if (carte !== undefined) t[12] = carte & 0xff;
   return t;
 }
 
@@ -286,6 +326,17 @@ export function appliquerCarte(grille, msg) {
 
 // ---------- Lignes de texte du rover (0x85) ----------
 
+/** Transforme « clé=valeur clé=valeur » en objet de chaînes brutes (préserve hexadécimal, binaire, zéros de tête). */
+export function analyserClesBruts(texte) {
+  const sortie = {};
+  for (const mot of String(texte ?? '').split(/\s+/)) {
+    const egal = mot.indexOf('=');
+    if (egal <= 0) continue;
+    sortie[mot.slice(0, egal)] = mot.slice(egal + 1);
+  }
+  return sortie;
+}
+
 /** Transforme « clé=valeur clé=valeur » en objet (nombres convertis quand c'est possible). */
 export function analyserCles(texte) {
   const sortie = {};
@@ -300,8 +351,40 @@ export function analyserCles(texte) {
 }
 
 /**
+ * Réassemble les lignes fragmentées par le firmware Rust en petit MTU
+ * (« materiel+ … », « acquisition+ … », « liaison+ … » — rust100/src/systeme.rs:958,977,979).
+ */
+export class AssembleurFragments {
+  constructor() {
+    this._tampons = new Map();
+  }
+
+  reinitialiser() {
+    this._tampons.clear();
+  }
+
+  /** Prend une ligne reçue et renvoie la ligne complète (ou réassemblée) à traiter. */
+  pousser(ligne) {
+    const s = String(ligne ?? '');
+    for (const prefixe of ['materiel', 'acquisition', 'liaison']) {
+      if (s.startsWith(`${prefixe}+ `)) {
+        const avant = this._tampons.get(prefixe) ?? `${prefixe} `;
+        const complet = avant + s.slice(prefixe.length + 2);
+        this._tampons.set(prefixe, complet);
+        return complet;
+      }
+      if (s.startsWith(`${prefixe} `)) {
+        this._tampons.set(prefixe, s);
+        return s;
+      }
+    }
+    return s;
+  }
+}
+
+/**
  * Analyse une ligne de texte envoyée par le rover.
- * Renvoie { genre, ... } avec genre ∈ info | modes | param | evt | err | calib | materiel | autre.
+ * Renvoie { genre, ... } avec genre ∈ info | modes | param | evt | err | calib | materiel | acquisition | liaison | maj | journal_rover | journal_fin | autre.
  */
 export function analyserLigne(ligne) {
   const texte = String(ligne ?? '').trim();
@@ -310,18 +393,48 @@ export function analyserLigne(ligne) {
   const reste = espace < 0 ? '' : texte.slice(espace + 1).trim();
   switch (mot) {
     case 'info': return { genre: 'info', valeurs: analyserCles(reste), texte };
-    case 'calib': return { genre: 'calib', valeurs: analyserCles(reste), texte };
-    case 'materiel': return { genre: 'materiel', valeurs: analyserCles(reste), texte };
-    case 'acquisition': return { genre: 'acquisition', valeurs: analyserCles(reste), texte };
+    case 'calib': return { genre: 'calib', valeurs: analyserCles(reste), reste, texte };
+    case 'materiel': return { genre: 'materiel', valeurs: analyserCles(reste), brut: analyserClesBruts(reste), texte };
+    case 'acquisition': return { genre: 'acquisition', valeurs: analyserCles(reste), brut: analyserClesBruts(reste), texte };
+    case 'liaison': return { genre: 'liaison', valeurs: analyserCles(reste), brut: analyserClesBruts(reste), texte };
+    case 'maj': return { genre: 'maj', valeurs: analyserCles(reste), brut: analyserClesBruts(reste), reste, texte };
     case 'profil': {
       const premier = reste.split(/\s+/)[0] ?? '';
       const section = premier && !premier.includes('=') ? premier : '';
       return { genre: 'profil', section, valeurs: analyserCles(reste), texte };
     }
-    case 'modes': return { genre: 'modes', modes: reste.split(',').map((s) => s.trim()).filter(Boolean), texte };
+    case 'modes': return { genre: 'modes', modes: reste.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean), texte };
     case 'evt': return { genre: 'evt', message: reste, texte };
     case 'err': return { genre: 'err', message: reste, texte };
     case 'c': return { genre: 'champs', valeurs: analyserCles(reste), texte };
+    case 'j': {
+      const tokens = reste.split(/\s+/).filter(Boolean);
+      if (tokens[0] === 'fin') {
+        const nombre = Number(tokens[1]);
+        const perdus = Number(tokens[2]);
+        return {
+          genre: 'journal_fin',
+          nombre: Number.isFinite(nombre) ? nombre : null,
+          perdus: Number.isFinite(perdus) ? perdus : 0,
+          reste,
+          texte,
+        };
+      }
+      const tempsN = Number(tokens[0]);
+      const tempsMs = tokens[0] !== undefined && Number.isFinite(tempsN) ? tempsN : null;
+      const nom = tempsMs !== null ? (tokens[1] ?? '') : (tokens[0] ?? '');
+      const debutVal = tempsMs !== null ? 2 : 1;
+      const valeursTexte = tokens.slice(debutVal).join(' ');
+      return {
+        genre: 'journal_rover',
+        tempsMs,
+        nom,
+        valeursTexte,
+        valeurs: analyserCles(valeursTexte),
+        reste,
+        texte,
+      };
+    }
     case 'p': {
       const [nom, valeur, min, max] = reste.split(/\s+/);
       const v = Number(valeur);
@@ -434,6 +547,16 @@ export function encoderEchoRetour(donnees = new Uint8Array(0)) {
   return t;
 }
 
+/** MAJ (0xA0) : utilisé par le faux rover et les tests. */
+export function encoderMajRetour(etat, valeur = 0) {
+  const t = new Uint8Array(6);
+  const vue = new DataView(t.buffer);
+  t[0] = T.MAJ;
+  t[1] = etat & 0xff;
+  vue.setUint32(2, valeur >>> 0, true);
+  return t;
+}
+
 /** Décode une trame téléphone -> rover (utilisé par la démo : le faux rover lit nos ordres). */
 export function decoderOrdre(donnees) {
   const o = versOctets(donnees);
@@ -451,6 +574,13 @@ export function decoderOrdre(donnees) {
     case T.TEXTE: return { type: 'texte', texte: decodeurTexte.decode(o.subarray(1)).trim() };
     case T.PING: return o.length >= 2 ? { type: 'ping', n: o[1] } : null;
     case T.ECHO: return { type: 'echo', donnees: o.slice(1) };
+    case T.MAJ_DEBUT:
+      return o.length >= 9 ? { type: 'maj_debut', taille: vue.getUint32(1, true), crc: vue.getUint32(5, true) } : null;
+    case T.MAJ_BLOC:
+      return o.length >= 6 ? { type: 'maj_bloc', position: vue.getUint32(1, true), donnees: o.slice(5) } : null;
+    case T.MAJ_FIN: return { type: 'maj_fin' };
+    case T.MAJ_INSTALLER:
+      return o.length >= 5 ? { type: 'maj_installer', crc: vue.getUint32(1, true) } : null;
     default: return { type: 'inconnu', code: o[0] };
   }
 }

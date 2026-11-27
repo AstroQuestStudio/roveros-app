@@ -31,6 +31,7 @@ export const CAPACITES_FAMILLE = {
     changementNom: true,
     diagnosticEtendu: true,
     bancEcho: true,
+    journalRover: false,
   },
   micropython: {
     manette: true,
@@ -43,6 +44,7 @@ export const CAPACITES_FAMILLE = {
     changementNom: true,
     diagnosticEtendu: false,
     bancEcho: false,
+    journalRover: false,
   },
   demo: {
     manette: true,
@@ -55,6 +57,7 @@ export const CAPACITES_FAMILLE = {
     changementNom: false,
     diagnosticEtendu: false,
     bancEcho: false,
+    journalRover: false,
   },
   inconnu: {
     manette: true,
@@ -67,6 +70,7 @@ export const CAPACITES_FAMILLE = {
     changementNom: false,
     diagnosticEtendu: false,
     bancEcho: false,
+    journalRover: false,
   },
 };
 
@@ -103,7 +107,7 @@ export function detecterFirmware(info = {}, modes = [], annonces = {}) {
     modes: listeModes.length > 0 ? [...listeModes] : (famille === FAMILLES.INCONNU ? ['manuel'] : []),
   };
 
-  // La liste des modes reçue du rover fait foi pour la calibration automatique.
+  // La liste des modes reçue du rover fait foi pour la calibration automatique et les déplacements autonomes.
   if (listeModes.length > 0) {
     capacites.calibrationAuto = listeModes.includes('calibrer');
   }
@@ -114,17 +118,32 @@ export function detecterFirmware(info = {}, modes = [], annonces = {}) {
     ['echo', 'bancEcho'],
     ['sauver', 'sauverParams'],
     ['usine', 'reglagesUsine'],
+    ['journal', 'journalRover'],
   ]) {
     const b = inf[cleInfo] !== undefined ? drapeauInfo(inf[cleInfo]) : undefined;
     if (b !== undefined) capacites[cleCap] = b;
   }
 
   // Corrections issues des réponses du rover pendant la session.
+  if (annonces?.majDisponible) capacites.majSansFil = true;
   if (annonces?.majIndisponible) capacites.majSansFil = false;
   if (annonces?.nomIndisponible) capacites.changementNom = false;
+  if (annonces?.sauverIndisponible) {
+    capacites.sauverParams = false;
+    capacites.reglagesUsine = false;
+  }
   if (annonces?.diagnosticEtendu) capacites.diagnosticEtendu = true;
   if (annonces?.bancEcho) capacites.bancEcho = true;
   if (annonces?.profil) capacites.profil = true;
+  if (annonces?.journalDisponible) capacites.journalRover = true;
+  else if (annonces?.journalIndisponible) capacites.journalRover = false;
+  else if (
+    famille === FAMILLES.RUST
+    && inf.journal === undefined
+    && (listeModes.length > 1 || capacites.majSansFil)
+  ) {
+    capacites.journalRover = true;
+  }
 
   return { famille, version, nom, capacites };
 }
