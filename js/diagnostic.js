@@ -183,9 +183,9 @@ const NOTIFIABLES = new Set(['driver_ko', 'souleve', 'choc', 'blocage', 'garde',
 /**
  * Drapeaux qui retombent d'eux-mêmes quand la carte moteurs décroche (quelques dizaines de ms).
  * Ils ne sont affichés qu'après DUREE_DEFAUT_PASSAGER_MS d'affilée. L'arrêt d'urgence, la batterie
- * faible et la garde restent immédiats (ils ne sont pas dans cette liste).
+ * faible, la garde et le contact avec un obstacle restent immédiats (ils ne sont pas dans cette liste).
  */
-export const DEFAUTS_PASSAGERS = ['driver_ko', 'blocage', 'patine', 'souleve', 'choc', 'imu_ko'];
+export const DEFAUTS_PASSAGERS = ['driver_ko', 'blocage', 'patine', 'souleve', 'imu_ko'];
 export const DUREE_DEFAUT_PASSAGER_MS = 400;
 
 /**

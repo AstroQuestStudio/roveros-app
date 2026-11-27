@@ -53,10 +53,10 @@ test('deux défauts qui se chevauchent sont suivis chacun pour son compte', () =
 
 test('Diagnostic.filtrer rend la trame brute si rien à retirer, et compte les défauts courts', () => {
   const d = new Diagnostic();
-  const brut = { flags: { choc: true }, x: 1 };
-  assert.equal(d.filtrer(brut, 0).flags.choc, false);
-  assert.equal(d.filtrer({ flags: {}, x: 2 }, 50).flags.choc, undefined);
-  assert.equal(d.courts.get('choc'), 1);
+  const brut = { flags: { blocage: true }, x: 1 };
+  assert.equal(d.filtrer(brut, 0).flags.blocage, false);
+  assert.equal(d.filtrer({ flags: {}, x: 2 }, 50).flags.blocage, undefined);
+  assert.equal(d.courts.get('blocage'), 1);
   const plein = { flags: { urgence: true } };
   assert.equal(d.filtrer(plein, 60), plein);
   assert.equal(d.filtrer(null, 70), null);
