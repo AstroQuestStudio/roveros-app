@@ -50,14 +50,27 @@ test('repère : la fenêtre glisse — le même point absolu se lit avec le nouv
   assert.deepEqual(r.relatif(0.9, -0.8), { xMm: 100, yMm: 0 });
 });
 
-test('repère : une trame ÉTAT encore à l\'ancienne version se lit avec l\'ancienne origine ; version inconnue ou impaire = ignorée', () => {
+test('repère : une trame ÉTAT encore à l\'ancienne version se lit avec l\'ancienne origine ; version inconnue = ignorée', () => {
   const r = new Repere();
   r.appliquer({ ox: -32, oy: -32, version: 0, cellule: 50 });
   r.appliquer({ ox: -16, oy: -32, version: 2, cellule: 50 });
   proche(r.absolu(100, 0, 0).x, 0.1, 1e-9); // ancienne origine : centre en 0
   proche(r.absolu(100, 0, 2).x, 0.9, 1e-9); // nouvelle origine : centre en 0,8
   assert.equal(r.absolu(100, 0, 200), null, 'version inconnue : on ne mélange pas deux repères');
-  assert.equal(r.absolu(100, 0, 3), null, 'version impaire : la fenêtre glisse');
+  assert.equal(r.absolu(100, 0, 3), null, 'version jamais annoncée : ignorée');
+});
+
+test('repère : le rover compte ses glissements 1, 2, 3… ; après le premier (version 1) il continue de bouger sur la carte', () => {
+  // relevé sur le vrai rover : ORIGINE ox=-64 oy=-32 version=1, trames ÉTAT en version 1
+  const r = new Repere();
+  r.appliquer({ ox: -32, oy: -32, version: 0, cellule: 50 });
+  r.appliquer({ ox: -64, oy: -32, version: 1, cellule: 50 });
+  const p = r.absolu(1057, 1173, 1); // 1,057 m à droite du centre de la fenêtre, qui est à x = −1,6 m
+  assert.ok(p, 'une version impaire est une version comme une autre');
+  proche(p.x, -0.543, 1e-9); proche(p.y, 1.173, 1e-9);
+  r.appliquer({ ox: -96, oy: -32, version: 2, cellule: 50 });
+  proche(r.absolu(0, 0, 1).x, -1.6, 1e-9); // trame encore en route : lue avec l'origine précédente
+  proche(r.absolu(0, 0, 2).x, -3.2, 1e-9);
 });
 
 test('repère : la taille de case vient de la trame ORIGINE (60 mm pour le rover de la démo)', () => {

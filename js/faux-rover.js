@@ -261,7 +261,7 @@ export class FauxRover {
     }
     this.carte = neuve; // ce qui sort de la fenêtre est oublié par le rover ; la bande découverte est « inconnue »
     this.ox += dx; this.oy += dy;
-    this.versionOrigine = (this.versionOrigine + 2) & 0xfe;
+    this.versionOrigine = (this.versionOrigine + 1) & 0xff;
     this.envoyerOrigine();
     this.renvoyerTout(); // après un glissement, le cœur renvoie toute la carte
     this.cheminEnvoye = ''; this.envoyerChemin();
@@ -840,7 +840,7 @@ export class FauxRover {
     if (this.cible) { const [x, y] = conv(this.cible.x, this.cible.y); this.cible = { x, y }; }
     this.x = 0; this.y = 0; this.cap = 0;
     this.carte.fill(0);
-    if (this.fenetre) { this.ox = -TAILLE_CARTE / 2; this.oy = -TAILLE_CARTE / 2; this.versionOrigine = (this.versionOrigine + 2) & 0xfe; this.envoyerOrigine(); this.renvoyerTout(); }
+    if (this.fenetre) { this.ox = -TAILLE_CARTE / 2; this.oy = -TAILLE_CARTE / 2; this.versionOrigine = (this.versionOrigine + 1) & 0xff; this.envoyerOrigine(); this.renvoyerTout(); }
     this.annuler();
     this.evt(this.firmware === 'rust' ? 'position remise à zéro' : 'recalé : nouvelle origine');
   }

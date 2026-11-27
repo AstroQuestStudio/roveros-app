@@ -58,7 +58,8 @@ export class Repere {
 
   /** Position reçue (mm relatifs au centre de la fenêtre) -> mètres absolus ; null si le repère de la trame est inconnu. */
   absolu(xMm, yMm, version) {
-    if (version !== undefined && this.recu && (version & 1)) return null; // version impaire : la fenêtre est en train de glisser
+    // (la version reçue est le NOMBRE de glissements de la fenêtre : 1, 2, 3… Une version impaire est aussi valable
+    // qu'une paire. Les ignorer figeait le rover sur la carte après un glissement sur deux.)
     const o = this.origineDe(version);
     if (!o) return null;
     const c = this.centre(o);
