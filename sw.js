@@ -3,10 +3,10 @@
 // rafraîchit le cache en arrière-plan quand le réseau répond (la version à jour sert à l'ouverture suivante).
 // Quand vous modifiez un fichier, changez VERSION ci-dessous pour renouveler le cache.
 
-const VERSION = 'roveros-v12';
+const VERSION = 'roveros-v13';
 const FICHIERS = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
-  'js/app.js', 'js/bord.js', 'js/carte.js', 'js/faux-rover.js', 'js/firmware.js', 'js/icones.js', 'js/inclinaison.js',
+  'js/app.js', 'js/bord.js', 'js/carte.js', 'js/faux-rover.js', 'js/figures.js', 'js/figures-panneau.js', 'js/firmware.js', 'js/icones.js', 'js/inclinaison.js',
   'js/journal.js', 'js/maj.js', 'js/manettes.js', 'js/protocole.js', 'js/qr.js', 'js/reglages.js', 'js/transport.js',
   'js/diagnostic.js', 'js/trace.js', 'js/latence.js', 'js/lissage.js', 'js/contours.js', 'js/patrouille.js', 'js/materiel.js', 'js/carte-globale.js', 'js/repere.js', 'js/gabarit.js', 'js/vitesse.js', 'js/transport-ble.js', 'js/transport-demo.js', 'js/transport-ws.js', 'js/utile.js',
   'css/polices/geist-latin-wght-normal.woff2', 'css/polices/geist-mono-latin-wght-normal.woff2',

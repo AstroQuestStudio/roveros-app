@@ -188,6 +188,34 @@
         </div>
       </div>
 
+      <!-- Figures : orbite, pivot, diagonale, carré, huit. Le rover ne se déplace que tant que le doigt reste sur le bouton. -->
+      <div class="figures" id="figures" hidden role="dialog" aria-label="Figures de conduite">
+        <div class="figures-entete">
+          <p class="figures-titre">Figures</p>
+          <button type="button" id="fig-fermer" class="bouton discret-bouton">Fermer</button>
+        </div>
+        <div class="seg large figures-choix" id="fig-choix" role="group" aria-label="Figure">
+          <button type="button" data-figure="orbite" class="actif">Orbite</button>
+          <button type="button" data-figure="pivot">Pivot</button>
+          <button type="button" data-figure="diagonale">Diagonale</button>
+          <button type="button" data-figure="carre">Carré</button>
+          <button type="button" data-figure="huit">Huit</button>
+        </div>
+        <div class="figures-reglages">
+          <label class="figures-curseur" id="fig-taille-bloc">
+            <span><span id="fig-taille-titre">Rayon</span> <output id="fig-taille-val">0,60 m</output></span>
+            <input type="range" id="fig-taille" min="30" max="150" step="5" value="60">
+          </label>
+          <label class="figures-curseur">
+            <span>Vitesse <output id="fig-vitesse-val">60 %</output></span>
+            <input type="range" id="fig-vitesse" min="20" max="100" step="5" value="60">
+          </label>
+        </div>
+        <div class="seg large" id="fig-options" hidden role="group" aria-label="Réglage de la figure"></div>
+        <button type="button" id="fig-jouer" class="figures-jouer">Maintenez pour jouer</button>
+        <p class="figures-aide" id="fig-aide" aria-live="polite"></p>
+      </div>
+
       <!-- Tiroir des réglages rapides : vitesse, sécurités, couches, navigation. Fermé par défaut. -->
       <div class="tiroir" id="tiroir" hidden role="dialog" aria-label="Réglages rapides">
         <div class="tiroir-titre">Vitesse maximale <output id="vitesse-pilotage" class="chiffres">0,40 m/s</output></div>
@@ -210,6 +238,9 @@
           <button type="button" id="btn-patrouille" class="bascule" aria-describedby="patrouille-aide"><span class="ico-slot" data-icone="patrouille"></span><span>Patrouille par points</span></button>
         </div>
         <p class="tiroir-aide" id="patrouille-aide" hidden></p>
+        <div class="deck-commandes">
+          <button type="button" id="btn-figures" class="bascule" aria-haspopup="dialog"><span>Figures</span></button>
+        </div>
         <div class="tiroir-couches" id="tiroir-couches" aria-label="Couches de la carte"></div>
         <div class="tiroir-nav" aria-label="Autres écrans">
           <button type="button" data-vue="modes"><span class="ico-slot" data-icone="modes"></span><span>Modes</span></button>

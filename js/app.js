@@ -16,10 +16,11 @@ import { creerQr, dessinerQr } from './qr.js';
 import { icone, MODES_FR, libelleMode } from './icones.js';
 import { poserTexte, poserDonnee } from './utile.js';
 import { Diagnostic, Limiteur, etatSecurites } from './diagnostic.js';
-import { commandesVitesse, limiterVitesse } from './vitesse.js';
+import { commandesVitesse, limiterVitesse, rotationPour } from './vitesse.js';
 import { MesureLatence, EssaiQualiteLiaison } from './latence.js';
 import { normaliser180 } from './lissage.js';
 import { Patrouille, MAX_POINTS, MIN_POINTS, PORTEE_PATROUILLE } from './patrouille.js';
+import { initFigures } from './figures-panneau.js';
 import { PORTEE_ALLER_MAX } from './repere.js';
 import { diagnosticMateriel, aDiagnosticEtendu } from './materiel.js';
 import { detecterFirmware, libelleFirmware } from './firmware.js';
@@ -1522,6 +1523,14 @@ $('#sw-reflexe').addEventListener('click', () => {
   vibrer(actif ? 15 : [35, 35, 35]);
 });
 majSecurites();
+
+// -- Figures de conduite : orbite, pivot, diagonale, carré, huit ; jouées tant qu'on maintient le doigt (figures.js) --
+// Les limites sont celles que le rover reçoit avec le réglage de vitesse : 100 % = v_max, rotation = w_max.
+initFigures({
+  pilote, estConnecte: () => !!S.transport?.connecte,
+  limites: () => ({ vMax: PREF.vitesse, wMax: rotationPour(PREF.vitesse) }),
+  fermerTiroir: () => tiroir(false), vibrer, afficherToast,
+});
 
 // -- Patrouille par points : on touche jusqu'à 6 points sur la carte, numérotés, puis « Lancer » --
 const patrouille = new Patrouille();

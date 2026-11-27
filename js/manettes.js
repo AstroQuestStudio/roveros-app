@@ -247,6 +247,7 @@ export class Pilote {
       rotation: { x: 0 },
       clavier: { x: 0, y: 0, w: 0 },
       inclinaison: { x: 0, y: 0 },
+      figure: { x: 0, y: 0, w: 0 }, // figures.js : consigne de la figure jouée (doigt maintenu)
     };
     this.contacts = new Set(); // sources avec un doigt actuellement posé
     this.monde = false; // repère du monde ou du rover
@@ -289,9 +290,9 @@ export class Pilote {
     const s = this.sources;
     const p = (v) => Math.round(limiter(v, -1, 1) * 100);
     return {
-      vx: p(s.joystick.x + s.clavier.x + s.inclinaison.x),
-      vy: p(s.joystick.y + s.clavier.y + s.inclinaison.y),
-      w: p(s.rotation.x + s.clavier.w),
+      vx: p(s.joystick.x + s.clavier.x + s.inclinaison.x + s.figure.x),
+      vy: p(s.joystick.y + s.clavier.y + s.inclinaison.y + s.figure.y),
+      w: p(s.rotation.x + s.clavier.w + s.figure.w),
     };
   }
 
@@ -371,6 +372,7 @@ export class Pilote {
     s.joystick.x = s.joystick.y = 0; s.rotation.x = 0;
     s.clavier.x = s.clavier.y = s.clavier.w = 0;
     s.inclinaison.x = s.inclinaison.y = 0;
+    s.figure.x = s.figure.y = s.figure.w = 0;
     this.contacts.clear();
     this._tReposContact = null;
     this._lisse = { vx: 0, vy: 0, w: 0 };

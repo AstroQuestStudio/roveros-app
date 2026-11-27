@@ -903,3 +903,27 @@ button.choix:active { transform: scale(0.99); }
   width: 0%; height: 100%; background: var(--accent); transition: width 120ms linear;
 }
 #maj-progres-texte { min-width: 44px; text-align: right; }
+
+/* Figures de conduite (js/figures-panneau.js) */
+.figures {
+  position: absolute; z-index: 30; left: 8px; right: 8px; bottom: calc(var(--bas-sûr) + 96px);
+  display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 22px;
+  background: rgba(8, 19, 29, 0.95); border: 1px solid var(--vitre-bord); box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.5);
+}
+.figures-entete { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.figures-titre { margin: 0; font-size: 16px; font-weight: 600; color: var(--t1); }
+.figures-choix { flex-wrap: wrap; }
+.figures-choix button, #fig-options button { flex: 1 1 auto; }
+.figures-reglages { display: flex; flex-direction: column; gap: 8px; }
+.figures-curseur { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--t2); }
+.figures-curseur output { color: var(--t1); font-variant-numeric: tabular-nums; }
+.figures-curseur input { width: 100%; accent-color: var(--accent); }
+.figures-jouer {
+  min-height: 72px; border-radius: 18px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-texte);
+  font-size: 17px; font-weight: 600; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.figures-jouer.joue { transform: scale(0.98); filter: brightness(0.9); }
+.figures-aide { margin: 0; font-size: 13px; line-height: 18px; color: var(--t2); }
+@media (min-width: 700px) {
+  .figures { left: 50%; right: auto; transform: translateX(-50%); width: min(520px, 60%); }
+}
