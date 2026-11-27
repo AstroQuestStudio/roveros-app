@@ -272,6 +272,40 @@
           <input type="range" id="course-dist" min="0.5" max="10" step="0.5" value="3.0" aria-label="Distance en mètres">
         </label>
 
+        <section class="bloc-outil course-carte" id="course-carte" hidden aria-label="Chronomètre de course">
+          <div class="bloc-outil-tete">
+            <h2>Course</h2>
+            <span class="petit" id="course-etat">Prête</span>
+          </div>
+          <p class="aide" id="course-aide">Le rover roule droit devant sur la distance choisie, le plus vite possible. Le chrono part au premier mouvement réel.</p>
+          <p class="course-chrono chiffres" id="course-chrono" aria-live="off">0,0 s</p>
+          <div class="course-resume" id="course-resume" hidden>
+            <p class="course-nouveau" id="course-nouveau" hidden>Nouveau record</p>
+            <dl class="course-mesures">
+              <div><dt>Temps</dt><dd id="course-r-temps" class="chiffres">–</dd></div>
+              <div><dt>Moyenne</dt><dd id="course-r-moyenne" class="chiffres">–</dd></div>
+              <div><dt>Pointe</dt><dd id="course-r-pointe" class="chiffres">–</dd></div>
+              <div><dt>Ralentissements</dt><dd id="course-r-ralenti" class="chiffres">–</dd></div>
+            </dl>
+            <p class="aide" id="course-r-ecart"></p>
+          </div>
+          <h3 id="course-records-titre">Records à 3,0 m</h3>
+          <ol class="course-records" id="course-records"></ol>
+          <div class="calib-ligne">
+            <button type="button" class="bouton plein" id="course-revoir" disabled>Revoir</button>
+            <button type="button" class="bouton" id="course-effacer">Effacer les records</button>
+          </div>
+          <div class="course-rejeu" id="course-rejeu" hidden>
+            <canvas id="course-canvas" class="course-canvas" aria-label="Trajet rejoué"></canvas>
+            <p class="petit chiffres" id="course-rejeu-info"></p>
+            <div class="course-vitesses" role="group" aria-label="Vitesse du rejeu">
+              <button type="button" class="bouton" data-rejeu-vitesse="1">×1</button>
+              <button type="button" class="bouton" data-rejeu-vitesse="2">×2</button>
+              <button type="button" class="bouton" data-rejeu-vitesse="4">×4</button>
+            </div>
+          </div>
+        </section>
+
         <section class="bloc-outil" id="calib-boite" hidden aria-label="Calibration guidée">
           <div class="bloc-outil-tete">
             <h2>Calibration guidée</h2>

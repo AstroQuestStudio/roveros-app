@@ -702,7 +702,7 @@ export class FauxRover {
       this.allerA(x, y, false, true);
       return;
     }
-    if (nom === 'course' && this.firmware === 'rust') {
+    if (nom === 'course' && this.firmware !== 'demo') { // rust et micropython : même course, « arrivé » à l'arrivée
       if (args.length === 1) {
         const d = Number(args[0]);
         if (!Number.isFinite(d)) { this.err('course : distance invalide'); this.mode = 'manuel'; return; }
