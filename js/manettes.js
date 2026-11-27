@@ -75,9 +75,12 @@ export class Manette {
     zone.addEventListener('pointermove', (ev) => this._mouvement(ev));
     zone.addEventListener('pointerup', (ev) => this._levee(ev));
     zone.addEventListener('pointercancel', (ev) => this._levee(ev));
+    // Capture perdue sans relâchement : le repli sur window prend le relais au lieu de couper le mouvement.
+    zone.addEventListener('lostpointercapture', (ev) => { if (ev.pointerId === this._id) this._capturee = false; });
     // Repli sur window : si la capture échoue ou est perdue en multipoint, le relâchement hors zone reste détecté.
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      window.addEventListener('pointermove', (ev) => this._mouvement(ev));
+      // Tant que la capture tient, la zone reçoit déjà l'événement (qui remonte ensuite jusqu'ici) : ne pas le traiter deux fois.
+      window.addEventListener('pointermove', (ev) => { if (!this._capturee) this._mouvement(ev); });
       window.addEventListener('pointerup', (ev) => this._levee(ev));
       window.addEventListener('pointercancel', (ev) => this._levee(ev));
       window.addEventListener('blur', () => this.relacher());
