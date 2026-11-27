@@ -903,3 +903,19 @@ button.choix:active { transform: scale(0.99); }
   width: 0%; height: 100%; background: var(--accent); transition: width 120ms linear;
 }
 #maj-progres-texte { min-width: 44px; text-align: right; }
+
+/* Carte Course : chronomètre, résumé, records, rejeu */
+.course-carte { margin-top: 24px; }
+.course-carte h3 { font-size: 15px; margin: 18px 0 6px; }
+.course-chrono { font-size: 56px; font-weight: 600; line-height: 1; margin: 12px 0 4px; }
+.course-resume { margin-top: 12px; }
+.course-nouveau { display: inline-block; margin: 0 0 8px; padding: 4px 10px; border-radius: 999px; background: #ffb347; color: #1b1b1b; font-weight: 600; font-size: 13px; }
+.course-mesures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.course-mesures div { min-width: 0; }
+.course-mesures dt { font-size: 13px; color: var(--t3); }
+.course-mesures dd { margin: 0; font-size: 18px; }
+.course-records { margin: 0; padding-left: 22px; font-size: 14px; }
+.course-records li.actif { font-weight: 600; }
+.course-rejeu { margin-top: 16px; }
+.course-canvas { display: block; width: 100%; height: 220px; border-radius: 12px; background: rgba(127, 127, 127, 0.12); }
+.course-vitesses { display: flex; gap: 8px; margin-top: 8px; }

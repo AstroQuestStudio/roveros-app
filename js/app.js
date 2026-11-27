@@ -23,6 +23,7 @@ import { Patrouille, MAX_POINTS, MIN_POINTS, PORTEE_PATROUILLE } from './patroui
 import { PORTEE_ALLER_MAX } from './repere.js';
 import { diagnosticMateriel, aDiagnosticEtendu } from './materiel.js';
 import { detecterFirmware, libelleFirmware } from './firmware.js';
+import { CourseJeu } from './course-ui.js';
 import {
   lireEnteteMaj, verifierCompatibilitePaquet, tailleBlocPourMtu, PilotageMaj, verifierApresRedemarrage,
 } from './maj.js';
@@ -78,6 +79,7 @@ const S = {
 };
 const suiviTension = new SuiviTension();
 const journal = new JournalSeance();
+const courseJeu = new CourseJeu(document); // carte Course : sans effet hors course
 const stockageJournal = new StockageJournal(journal);
 stockageJournal.charger().then((ok) => { if (ok && $('#dlg-journal').open) rendreJournal(); });
 stockageJournal.demarrer(3000);
@@ -364,6 +366,7 @@ function envoyerTexte(texte, { silencieux = false } = {}) {
   const bloquee = S.urgence.actif && !/^(infos|params)$/.test(texte);
   if (bloquee) { afficherToast('err', "Arrêt d'urgence actif : commande refusée"); return false; }
   S.transport.envoyer(encoderTexte(texte));
+  courseJeu.commande(texte, performance.now()); // « mode … » autre que la course arrête la course
   if (!silencieux) reglages.ecrireConsole(texte, 'sortant');
   // Quelques commandes changent aussi l'affichage local tout de suite.
   if (texte === 'recaler' || texte === 'carte raz') { carte.effacerCarte(); if (texte === 'recaler') carte.reinitialiserTrajet(); }
@@ -442,6 +445,7 @@ function surEtatLiaison(t, { etat, message }) {
   majMenuRover();
   $('#carte-vide').hidden = etat === 'connecte' || carte.rover.ok;
   if (etat !== 'connecte') {
+    courseJeu.deconnexion(performance.now());
     pilote.toutArreter();
     diagnostic.reinitialiser();
     essaiQualite.arreter();
@@ -560,6 +564,7 @@ function surEtat(e) {
   S.etat = e;
   S.tEtat = performance.now();
   journal.noterEtat(S.tEtat, e); // le journal reçoit la trame brute : tous les drapeaux, même les passagers
+  courseJeu.etat(e, S.tEtat);
   const eAffiche = diagnostic.filtrer(e, S.tEtat); // ligne d'état et liste des drapeaux : sans les défauts passagers trop courts
   carte.majEtat(e);
   $('#carte-vide').hidden = true;
@@ -719,6 +724,7 @@ function surLigne(texte) {
   const l = analyserLigne(texteComplet);
   if (l.genre !== 'param' && l.genre !== 'champs' && l.genre !== 'journal_rover') reglages.ecrireConsole(texteComplet, 'entrant', l.genre);
   if (l.genre !== 'champs' && l.genre !== 'journal_rover') journal.noterTexte(performance.now(), texteComplet);
+  if (l.genre === 'evt' || l.genre === 'err') courseJeu.ligne(texteComplet, performance.now());
   switch (l.genre) {
     case 'champs':
       journal.noterChamps(performance.now(), l.valeurs);
@@ -958,6 +964,7 @@ function rendreModes() {
   }
   $('#modes-cote').hidden = !noms.some((n) => n === 'carre' || n === 'glisse');
   $('#modes-course').hidden = !noms.includes('course');
+  $('#course-carte').hidden = !noms.includes('course');
   const calibDispo = noms.includes('calibrer') || S.profil.capacites.calibrationAuto;
   $('#calib-boite').hidden = !calibDispo;
   $('#autotest-boite').hidden = !noms.includes('autotest');
@@ -976,6 +983,7 @@ function rendreModes() {
       const arg = nom === 'carre' || nom === 'glisse' ? ` ${S.cote}` : nom === 'course' ? ` ${S.distanceCourse}` : '';
       if (envoyerTexte(`mode ${nom}${arg}`)) {
         vibrer(15);
+        if (nom === 'course') courseJeu.lancer(S.distanceCourse, performance.now());
         if (nom !== 'arret') afficherToast('evt', `${libelleMode(nom)} lancé`);
       }
     });
@@ -1127,6 +1135,7 @@ function envoyerUrgence(actif) {
 
 function declencherUrgence() {
   if (S.urgence.actif) return;
+  courseJeu.arreter(performance.now());
   S.urgence.actif = true;
   S.urgence.essais = 0;
   pilote.bloque = true;
@@ -1158,6 +1167,7 @@ function confirmerUrgence(e, depuisBoucle = false) {
     if (depuisBoucle && S.urgence.essais++ < 20) envoyerUrgence(true);
   } else if (!S.urgence.actif && rover && !depuisBoucle) {
     // Le rover est en urgence sans que nous l'ayons demandé (bouton physique, autre téléphone) : on s'aligne.
+    courseJeu.arreter(performance.now());
     S.urgence.actif = true; pilote.bloque = true; pilote.toutArreter();
     manetteXY.relacher(); manetteRot.relacher();
     majUrgenceUI();
@@ -1279,6 +1289,7 @@ reinitialiserRepere();
 /** Stop : freinage normal (pas l'arrêt d'urgence). Coupe aussi tout comportement autonome. */
 $('#btn-stop').addEventListener('click', () => {
   pilote.toutArreter(); manetteXY.relacher(); manetteRot.relacher();
+  courseJeu.arreter(performance.now());
   if (!S.urgence.actif && S.transport?.connecte) S.transport.envoyer(encoderStop(), { priorite: true });
   vibrer(15);
 });
@@ -1414,7 +1425,7 @@ document.addEventListener('contextmenu', (ev) => { if (!ev.target.closest('input
 window.addEventListener('keydown', (ev) => {
   const champ = ev.target?.tagName === 'INPUT' || ev.target?.tagName === 'TEXTAREA';
   if (ev.key === 'Escape') { if ($('dialog[open]')) fermerFeuilles(); else declencherUrgence(); }
-  if (ev.key === ' ' && !champ && !ev.repeat && ev.target?.tagName !== 'BUTTON') { ev.preventDefault(); if (!S.urgence.actif) S.transport?.envoyer(encoderStop()); }
+  if (ev.key === ' ' && !champ && !ev.repeat && ev.target?.tagName !== 'BUTTON') { ev.preventDefault(); courseJeu.arreter(performance.now()); if (!S.urgence.actif) S.transport?.envoyer(encoderStop()); }
 });
 
 // Quand l'application passe en arrière-plan, on lâche tout : le rover s'arrête.
@@ -1422,6 +1433,7 @@ document.addEventListener('visibilitychange', () => {
   majVerrouEcran();
   journal.noterVisibilite(performance.now(), !document.hidden);
   if (document.hidden) {
+    courseJeu.arreter(performance.now());
     pilote.toutArreter(); manetteXY.relacher(); manetteRot.relacher();
     if (S.transport?.connecte && !S.urgence.actif) S.transport.envoyer(encoderStop());
     stockageJournal.sauvegarder();
