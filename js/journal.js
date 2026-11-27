@@ -17,6 +17,7 @@ export const CAPACITE_ETATS = 32768;  // > 27 min à 20 trames/s
 export const CAPACITE_CHAMPS = 16384; // > 68 min à 4 Hz
 export const CAPACITE_DOIGTS = 65536; // > 18 min à 60 Hz
 export const CAPACITE_EVENEMENTS = 4096;
+export const CAPACITE_JOURNAL_ROVER = 2048;
 
 export const SOURCES_DOIGT = { xy: 0, rot: 1, inclinaison: 2, clavier: 3 };
 export const NOMS_SOURCE_DOIGT = ['xy', 'rot', 'inclinaison', 'clavier'];
@@ -162,8 +163,10 @@ export class JournalSeance {
       y: new Float32Array(CD),
     };
 
-    // --- Événements discrets (connexions, textes, visibilité, repères) ---
+    // --- Événements discrets (connexions, textes, visibilité, repères, diagnostics) ---
     this.evenements = [];
+    // --- Lignes du journal embarqué relevé par la commande « journal » ---
+    this.journalRover = [];
     this._dernierPlafond = NaN;
     this._dernierFrein = 255;
     this._dernierCycles = -1;
@@ -298,12 +301,64 @@ export class JournalSeance {
     return rep;
   }
 
+  /** Range un relevé de diagnostic (cause de redémarrage raz=, état des bus, liaison) dans le journal de séance. */
+  noterDiagnostic(t, diag) {
+    if (!diag || typeof diag !== 'object') return;
+    this._pousserEvenement({
+      t,
+      genre: 'diagnostic',
+      raz: diag.raz ?? null,
+      bus: Array.isArray(diag.bus) ? diag.bus.map((b) => ({ index: b.index, nom: b.nom, texte: b.texte, alerte: !!b.alerte, abrt: b.abrt, lig: b.lig, reprises: b.reprises, tentatives: b.tentatives })) : [],
+      resume: diag.resume ?? '',
+      alerte: !!diag.alerte,
+    });
+  }
+
+  /** Enregistre une ligne « j <temps_ms> <nom> <valeurs…> » relevée depuis le rover (telle quelle, alignable). */
+  noterJournalRover(tReception, ligneBrute, parsed, { lotId = 0, decalagePerfMs = null } = {}) {
+    const tempsMs = typeof parsed?.tempsMs === 'number' && Number.isFinite(parsed.tempsMs) ? parsed.tempsMs : null;
+    const aligne = decalagePerfMs !== null && tempsMs !== null;
+    const t = aligne ? tempsMs + decalagePerfMs : tReception;
+    const entree = {
+      lotId,
+      ligne: String(ligneBrute),
+      tempsMs,
+      nom: parsed?.nom ? String(parsed.nom) : '',
+      valeurs: parsed?.valeursTexte ? String(parsed.valeursTexte) : '',
+      t,
+      tReception,
+      aligne,
+    };
+    this.journalRover.push(entree);
+    if (this.journalRover.length > CAPACITE_JOURNAL_ROVER) {
+      this.journalRover.splice(0, this.journalRover.length - CAPACITE_JOURNAL_ROVER);
+    }
+    this.sale = true;
+    return entree;
+  }
+
+  /** Aligne les lignes d'un relevé « journal » sur l'horloge de l'application (decalage = tApp - tRoverMs). */
+  alignerJournalRover(lotId, decalagePerfMs) {
+    if (!Number.isFinite(decalagePerfMs)) return 0;
+    let maj = 0;
+    for (const entree of this.journalRover) {
+      if (entree.lotId === lotId && entree.tempsMs !== null) {
+        entree.t = entree.tempsMs + decalagePerfMs;
+        entree.aligne = true;
+        maj++;
+      }
+    }
+    if (maj > 0) this.sale = true;
+    return maj;
+  }
+
   vider() {
     this.envois.total = 0;
     this.etats.total = 0;
     this.champs.total = 0;
     this.doigts.total = 0;
     this.evenements.length = 0;
+    this.journalRover.length = 0;
     this._dernierPlafond = NaN;
     this._dernierFrein = 255;
     this._dernierCycles = -1;
@@ -484,12 +539,21 @@ function analyserFenetre(journal, tMin, tMax, { cadencePrevueMs } = {}) {
   });
   clorePeriode();
 
-  // 3. Redémarrages et déconnexions
+  // 3. Redémarrages, diagnostics et déconnexions
   for (const ev of journal.evenements) {
     if (ev.t < tMin || ev.t > tMax) continue;
     const h = formaterHeureFr(journal.epochDe(ev.t));
     if (ev.genre === 'redemarrage') {
       phrases.push(`${h} : redémarrage du rover détecté (compteur de cycles revenu de ${ev.cyclesAvant} à ${ev.cyclesApres})`);
+    } else if (ev.genre === 'diagnostic') {
+      if (ev.raz?.alerte) phrases.push(`${h} : cause du redémarrage : ${ev.raz.libelle}`);
+      if (Array.isArray(ev.bus)) {
+        for (const b of ev.bus) {
+          if (b.alerte || b.reprises > 0 || b.tentatives > 0) {
+            phrases.push(`${h} : ${b.nom} — ${b.texte}`);
+          }
+        }
+      }
     } else if (ev.genre === 'liaison' && ev.etat === 'erreur') {
       phrases.push(`${h} : liaison perdue${ev.message ? ` (${ev.message})` : ''}`);
     } else if (ev.genre === 'visibilite' && !ev.visible) {
@@ -697,6 +761,15 @@ export function exporterJson(journal) {
     champs,
     doigts,
     evenements: journal.evenements.map((ev) => ({ ...ev, t: Math.round(ev.t * 10) / 10 })),
+    journalRover: journal.journalRover.map((e) => ({
+      ligne: e.ligne,
+      tempsMs: e.tempsMs,
+      nom: e.nom,
+      valeurs: e.valeurs,
+      t: Math.round(e.t * 10) / 10,
+      heure: formaterHeureFr(journal.epochDe(e.t)),
+      aligne: e.aligne,
+    })),
   };
 }
 
@@ -744,6 +817,7 @@ export function creerInstantanee(journal) {
     champs: copierTranche(journal.champs),
     doigts: copierTranche(journal.doigts),
     evenements: journal.evenements.slice(),
+    journalRover: journal.journalRover.slice(),
   };
 }
 
@@ -761,6 +835,7 @@ export function restaurerInstantanee(journal, snap) {
   rechargerTranche(journal.champs, snap.champs);
   rechargerTranche(journal.doigts, snap.doigts);
   journal.evenements = Array.isArray(snap.evenements) ? snap.evenements.slice(-CAPACITE_EVENEMENTS) : [];
+  journal.journalRover = Array.isArray(snap.journalRover) ? snap.journalRover.slice(-CAPACITE_JOURNAL_ROVER) : [];
   journal.sale = false;
   return true;
 }
