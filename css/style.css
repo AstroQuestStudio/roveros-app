@@ -769,7 +769,7 @@ button.choix:active { transform: scale(0.99); }
   .carte-outils { gap: 6px; }
 }
 
-/* Portrait : l'avertissement des sécurités prend toute la largeur (sinon son texte se coupe en huit lignes) ;
+  /* Portrait : l'avertissement des sécurités prend toute la largeur (sinon son texte se coupe en huit lignes) ;
    la colonne de boutons de droite descend d'autant. */
 @media (orientation: portrait) {
   .etat-bloc { right: 10px; max-width: none; }
@@ -777,3 +777,55 @@ button.choix:active { transform: scale(0.99); }
   .bandeau-securites { max-width: none; width: 100%; }
   #app:has(.bandeau-securites:not([hidden])) .carte-outils { top: calc(var(--haut) + 66px); }
 }
+
+/* ================= Profil firmware, diagnostic étendu, réglages Rust ================= */
+
+.puce-fw {
+  flex: none; padding: 2px 8px; border-radius: 999px;
+  background: var(--s3); border: 1px solid var(--ligne-2);
+  color: var(--t2); font-size: 11px; line-height: 15px; font-weight: 500; white-space: nowrap;
+}
+@media (orientation: portrait) and (max-width: 520px) { .puce-fw { display: none; } }
+
+.fw-bandeau {
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding: 12px 14px;
+  border-radius: 14px; background: var(--s2); border: 1px solid var(--ligne-2);
+}
+.fw-ligne { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.fw-capacites { display: flex; flex-wrap: wrap; gap: 6px; }
+.fw-cap {
+  padding: 2px 8px; border-radius: 999px; font-size: 12px; line-height: 18px;
+  background: var(--s3); border: 1px solid var(--ligne); color: var(--t2);
+}
+.fw-cap.dispo { border-color: var(--vitre-bord); color: var(--accent); }
+.fw-cap.indispo { opacity: 0.55; color: var(--t3); }
+
+.materiel-grille {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px;
+  width: 100%; margin: 8px 0 0; padding-top: 12px; border-top: 1px solid var(--ligne);
+}
+@media (min-width: 560px) { .materiel-grille { grid-template-columns: repeat(3, 1fr); } }
+.materiel-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.materiel-item dt { font-size: 12px; color: var(--t3); }
+.materiel-item dd { margin: 0; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.materiel-item.alerte dd { color: var(--ambre); }
+
+.bloc-nom { margin-bottom: 8px; }
+.bloc-nom .champ-ligne { margin-top: 0; }
+.badge-indispo {
+  display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+  background: var(--s3); border: 1px solid var(--ligne); color: var(--t3);
+  font-size: 12px; font-weight: 400; vertical-align: middle;
+}
+.bouton:disabled { opacity: 0.45; cursor: not-allowed; }
+.bouton.danger-bouton { background: var(--negatif); border-color: var(--negatif); color: #fff; }
+.petit-retour { margin: 8px 0 0; font-size: 13px; color: var(--negatif); }
+.retour-rover {
+  margin: 8px 0 12px; padding: 8px 12px; border-radius: 10px;
+  background: var(--s2); border: 1px solid var(--ligne-2);
+  font-family: var(--police-mono); font-size: 13px; line-height: 18px; color: var(--t1);
+  user-select: text; -webkit-user-select: text;
+}
+.retour-rover.ok { border-color: var(--positif); color: var(--positif); }
+.retour-rover.err { border-color: var(--negatif); color: #ffb4ae; }
+.params-actions { margin-bottom: 8px; }

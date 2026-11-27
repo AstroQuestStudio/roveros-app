@@ -8,6 +8,27 @@ export function echapper(t) {
   return String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/** Contrôle de saisie pour la commande « nom <NOM> » (20 caractères ASCII sans espace, ou « - »). */
+export function validerNomRover(saisie) {
+  const brut = String(saisie ?? '');
+  if (brut.trim() === '') {
+    return { valide: false, erreur: 'Entrez un nom (1 à 20 caractères ASCII sans espace) ou « - ».' };
+  }
+  if (brut.trim() === '-') {
+    return { valide: true, nom: '-', commande: 'nom -' };
+  }
+  if (/\s/.test(brut)) {
+    return { valide: false, erreur: "Pas d'espace dans le nom." };
+  }
+  if (brut.length > 20) {
+    return { valide: false, erreur: '20 caractères maximum.' };
+  }
+  if (!/^[\x21-\x7e]+$/.test(brut)) {
+    return { valide: false, erreur: 'Caractères ASCII uniquement (sans accent).' };
+  }
+  return { valide: true, nom: brut, commande: `nom ${brut}` };
+}
+
 /** Pas d'un curseur selon l'étendue des valeurs (≈ 200 crans, arrondi à une puissance de 10 × 1, 2 ou 5). */
 export function pasCurseur(min, max) {
   const brut = (max - min) / 200;

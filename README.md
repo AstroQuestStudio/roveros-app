@@ -16,9 +16,11 @@ C'est un site **statique** : aucun outil de compilation, aucune dépendance char
 
 | Mode | Usage |
 |---|---|
-| Bluetooth | le vrai rover (`Rover-XXXX`, service UART Nordic). Reconnexion automatique. |
+| Bluetooth | le vrai rover (service UART Nordic, ou `Rover-XXXX`). Reconnexion automatique. |
 | WebSocket | le simulateur sur PC (`ws://hôte:8765/ws`) |
-| Démo | rien à brancher |
+| Démo | rien à brancher (choix du firmware Rust ou MicroPython) |
+
+À la connexion, l'application détecte la famille du firmware (`rust`, `micropython`, `demo`, `inconnu`) depuis `info` et `modes`, et adapte l'écran aux capacités disponibles (modes autonomes, sauvegarde en flash et réglages d'usine, changement de nom, diagnostic matériel étendu, essai de liaison sur 50 trames par écho `0x12` ou `PING`).
 
 Le protocole (trames binaires, commandes texte) est décrit dans `PROTOCOLE.md` du projet RoverOS ; `js/protocole.js` le code et le décode.
 L'application n'envoie jamais plus de 25 trames par seconde.
@@ -73,6 +75,7 @@ js/bord.js            tableau de bord et radar
 js/reglages.js        paramètres du rover et console
 js/qr.js              générateur de QR code
 js/app.js             le chef d'orchestre
+js/firmware.js        détection du firmware et capacités
 sw.js, manifest.webmanifest, icones/   installation et hors ligne
 ```
 

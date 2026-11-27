@@ -13,6 +13,7 @@
   <link rel="apple-touch-icon" href="icones/icone-192.png">
   <link rel="preload" href="css/polices/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="modulepreload" href="js/app.js">
+  <link rel="modulepreload" href="js/firmware.js">
   <link rel="modulepreload" href="js/protocole.js">
   <link rel="modulepreload" href="js/carte.js">
   <link rel="modulepreload" href="js/manettes.js">
@@ -56,11 +57,13 @@
         <button id="btn-liaison" class="puce-liaison" data-etat="deconnecte" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Rover : choisir ou déconnecter">
           <span class="voyant" aria-hidden="true"></span>
           <span id="liaison-texte" class="puce-titre">Hors ligne</span>
+          <span id="entete-fw" class="puce-fw" hidden></span>
           <span class="ico-slot chevron" data-icone="chevronBas"></span>
         </button>
         <div class="menu-flottant" id="menu-rover" role="menu" hidden>
           <button type="button" role="menuitem" id="mr-connecter">Se connecter…</button>
-          <button type="button" role="menuitem" id="mr-demo">Démo, sans rover</button>
+          <button type="button" role="menuitem" id="mr-demo">Démo · Firmware Rust</button>
+          <button type="button" role="menuitem" id="mr-demo-mpy">Démo · Firmware MicroPython</button>
           <button type="button" role="menuitem" id="mr-deconnecter">Se déconnecter</button>
         </div>
       </div>
@@ -224,7 +227,7 @@
         <p class="aide" id="modes-aide">Lancez un comportement autonome. Toucher une manette reprend la main.</p>
         <div id="modes-grille" class="grille-modes"></div>
         <div id="modes-vide" class="etat-vide" hidden>
-          <p>Aucun comportement connu. La liste arrive du rover à la connexion.</p>
+          <p id="modes-vide-texte">Aucun comportement connu. La liste arrive du rover à la connexion.</p>
           <button type="button" class="bouton" id="btn-modes-infos">Demander la liste</button>
         </div>
         <label class="reglage-ligne" id="modes-cote" hidden>
@@ -238,6 +241,13 @@
     <section id="vue-bord" class="vue defilant" aria-label="Tableau de bord">
       <div class="page">
         <h1>Tableau de bord</h1>
+        <div class="fw-bandeau" id="b-firmware-boite" hidden>
+          <div class="fw-ligne">
+            <strong id="b-firmware-nom">Firmware inconnu</strong>
+            <span class="petit" id="b-firmware-rover"></span>
+          </div>
+          <div class="fw-capacites" id="b-firmware-caps"></div>
+        </div>
         <div class="tuiles">
           <div class="tuile large">
             <div class="tuile-nom">Tension</div>
@@ -255,10 +265,17 @@
         <h2>État du rover</h2>
         <ul class="drapeaux" id="b-drapeaux"><li class="drapeau neutre">En attente du rover</li></ul>
         <h2>Matériel du rover</h2>
-        <p class="aide">Temps de calcul, retards et erreurs. Se met à jour à la demande.</p>
+        <p class="aide">Temps de calcul, durée des cycles, retards, mémoire et bus. Se met à jour à la demande.</p>
         <div class="materiel" id="b-materiel-boite">
           <p class="materiel-ligne" id="b-materiel">Pas encore demandé.</p>
           <button type="button" class="bouton" id="btn-materiel">Actualiser</button>
+          <dl class="materiel-grille" id="b-materiel-details" hidden></dl>
+        </div>
+        <h2>Qualité de la liaison</h2>
+        <p class="aide" id="b-qualite-aide">Envoie 50 trames pour mesurer l'aller-retour médian et les pertes.</p>
+        <div class="materiel" id="b-qualite-boite">
+          <p class="materiel-ligne" id="b-qualite-resultat">Prêt pour la mesure.</p>
+          <button type="button" class="bouton" id="btn-qualite-liaison">Tester la liaison</button>
         </div>
         <h2>Radar de la tête</h2>
         <div class="radar-carte"><canvas id="radar-canvas" aria-label="Radar polaire de la tête du sonar"></canvas></div>
@@ -269,6 +286,12 @@
     <section id="vue-reglages" class="vue defilant" aria-label="Réglages">
       <div class="page">
         <h1>Réglages</h1>
+        <div class="fw-bandeau" id="r-firmware-boite" hidden>
+          <div class="fw-ligne">
+            <strong id="r-firmware-nom">Firmware inconnu</strong>
+            <span class="petit" id="r-firmware-maj">Mise à jour sans fil : —</span>
+          </div>
+        </div>
         <div class="rangee-boutons">
           <button type="button" class="bouton" data-vue-lien="bord"><span class="ico-slot" data-icone="bord"></span>Tableau de bord</button>
           <button type="button" class="bouton" data-vue-lien="partage"><span class="ico-slot" data-icone="partage"></span>Partager l'application</button>
@@ -335,7 +358,26 @@
           <span class="aide" id="incl-etat">Inactive</span>
         </div>
 
-        <h2>Paramètres du rover</h2>
+        <h2>Nom du rover <span class="badge-indispo" id="nom-badge-indispo" hidden>Pas sur ce firmware</span></h2>
+        <div class="bloc-nom" id="bloc-nom-rover">
+          <p class="aide">20 caractères ASCII au plus, sans espace (ou <code>-</code> pour le nom d'origine). Effectif au prochain démarrage.</p>
+          <div class="champ-ligne">
+            <input id="rover-nom-saisie" type="text" maxlength="20" placeholder="Ex. LODILABIDON" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Nouveau nom du rover">
+            <button type="button" class="bouton plein" id="btn-nom-envoyer">Enregistrer</button>
+            <button type="button" class="bouton" id="btn-nom-origine" title="Rendre le nom d'origine (nom -)">Origine</button>
+          </div>
+          <p class="aide petit-retour" id="rover-nom-aide" hidden></p>
+          <p class="retour-rover" id="rover-nom-retour" hidden></p>
+        </div>
+
+        <h2>Paramètres du rover <span class="badge-indispo" id="params-badge-indispo" hidden>Pas sur ce firmware</span></h2>
+        <div class="rangee-boutons params-actions" id="bloc-params-actions">
+          <button type="button" class="bouton plein" id="btn-params-sauver">Enregistrer dans le rover</button>
+          <button type="button" class="bouton" id="btn-params-usine">Réglages d'usine</button>
+          <button type="button" class="bouton danger-bouton" id="btn-params-usine-confirmer" hidden>Confirmer la restauration</button>
+          <button type="button" class="bouton discret-bouton" id="btn-params-usine-annuler" hidden>Annuler</button>
+        </div>
+        <p class="retour-rover" id="params-retour" hidden></p>
         <div class="recherche">
           <span class="ico-slot" data-icone="recherche"></span>
           <input type="search" id="param-recherche" placeholder="Rechercher un paramètre" autocomplete="off" aria-label="Rechercher un paramètre">
@@ -414,7 +456,11 @@
     </form>
     <button type="button" class="choix choix-demo" id="cx-demo">
       <span class="choix-ico" data-icone="demo"></span>
-      <span class="choix-textes"><strong>Démo, sans rover</strong><small>Un rover simulé dans la page : pièce, murs, sonar, carte</small></span>
+      <span class="choix-textes"><strong>Démo · Firmware Rust</strong><small>Rover simulé 100 % Rust : diagnostic étendu, banc d'écho, sauvegarde en flash</small></span>
+    </button>
+    <button type="button" class="choix choix-demo" id="cx-demo-mpy">
+      <span class="choix-ico" data-icone="demo"></span>
+      <span class="choix-textes"><strong>Démo · Firmware MicroPython</strong><small>Rover simulé MicroPython : pièce, murs, sonar, carte, comportements autonomes</small></span>
     </button>
     <button type="button" class="bouton discret-bouton" id="cx-deconnecter" hidden>Se déconnecter</button>
   </dialog>

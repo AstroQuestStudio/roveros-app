@@ -7,10 +7,11 @@ import { FauxRover } from './faux-rover.js';
 const PAS_MS = 50; // le faux rover avance par pas de 50 ms (20 Hz)
 
 export class TransportDemo extends Transport {
-  /** @param {object} o  monde : 'salle' (3 m) ou 'couloir' (12 m, carte sans limite) */
-  constructor({ monde = 'salle' } = {}) {
+  /** @param {object} o  monde : 'salle' (3 m) ou 'couloir' (12 m), firmware : 'rust' | 'micropython' | 'demo' */
+  constructor({ monde = 'salle', firmware = 'rust' } = {}) {
     super('demo');
     this.monde = monde;
+    this.firmware = firmware;
     this.rover = null;
     this._horloge = null;
     this._dernier = 0;
@@ -20,14 +21,17 @@ export class TransportDemo extends Transport {
   async connecter() {
     this._changerEtat('connexion', 'Démarrage du rover simulé…');
     this.rover = new FauxRover({
-      monde: this.monde, fenetre: this.monde === 'couloir', // le couloir essaie la fenêtre de carte glissante
+      monde: this.monde,
+      firmware: this.firmware,
+      fenetre: this.monde === 'couloir', // le couloir essaie la fenêtre de carte glissante
       // Les trames du faux rover arrivent comme celles d'un vrai, avec un tout petit délai.
       sortie: (trame) => queueMicrotask(() => { if (this.etat === 'connecte') this._recevoir(trame); }),
       planifier: (fn, ms) => setTimeout(() => { if (this.etat === 'connecte') fn(); }, ms),
     });
     this._dernier = performance.now();
     this._horloge = setInterval(() => this._avancer(), PAS_MS);
-    this._changerEtat('connecte', 'Rover simulé');
+    const nom = this.firmware === 'rust' ? 'Démo Rust' : this.firmware === 'micropython' ? 'Démo MicroPython' : 'Rover simulé';
+    this._changerEtat('connecte', nom);
     setTimeout(() => this.rover?.accueillir(), 120);
   }
 

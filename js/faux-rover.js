@@ -16,11 +16,13 @@
 
 import {
   assemblerDrapeaux, decoderOrdre, encoderCarte, encoderChemin, encoderEtat, encoderPoints, encoderOrigine,
-  encoderPong, encoderTexteRover, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
+  encoderPong, encoderEchoRetour, encoderTexteRover, TAILLE_CARTE, CASE_INCONNUE, CASE_LIBRE, CASE_OCCUPEE,
 } from './protocole.js';
 import { RAYON_CIRCONSCRIT, LARGEUR_ROVER, positionSonar } from './gabarit.js';
 
 export const MODES = ['manuel', 'chien', 'explorer', 'base', 'carre', 'glisse', 'danse', 'mur', 'slalom', 'calibrer', 'patrouille', 'arret'];
+export const MODES_RUST = ['manuel'];
+export const MODES_MICROPYTHON = ['manuel', 'base', 'autotest', 'calibrer', 'chien', 'danse', 'explorer', 'glisse', 'aller', 'slalom', 'mur', 'carre', 'patrouille', 'course'];
 
 const CELLULE = 0.06; // taille d'une case de la carte, en mètres (la carte couvre ±1,92 m)
 const RAYON = RAYON_CIRCONSCRIT; // cercle qui entoure le châssis réel (25 × 20 cm : voir gabarit.js)
@@ -139,12 +141,18 @@ export class FauxRover {
    *   planifier(fn, ms)   exécute fn après ms (pour simuler le délai du PONG) ; par défaut, tout de suite
    *   alea()              générateur de nombres entre 0 et 1 (Math.random par défaut)
    */
-  constructor({ sortie, planifier = (fn) => fn(), alea = Math.random, fenetre = false, monde = 'salle' } = {}) {
+  constructor({ sortie, planifier = (fn) => fn(), alea = Math.random, fenetre = false, monde = 'salle', firmware = 'demo' } = {}) {
     this.sortie = sortie;
     this.planifier = planifier;
     this.alea = alea;
+    this.firmware = firmware;
+    this.nomOrigine = firmware === 'rust' ? 'LODILABIDON' : firmware === 'micropython' ? 'Rover-4538' : 'Rover-DEMO';
+    this.nom = this.nomOrigine;
+    this.version = firmware === 'rust' ? 'rust100-0.1' : firmware === 'micropython' ? '0.1.1' : 'demo-1.0';
+    this.modes = firmware === 'rust' ? [...MODES_RUST] : firmware === 'micropython' ? [...MODES_MICROPYTHON] : [...MODES];
     this.params = {};
     for (const [nom, [v, min, max]] of Object.entries(DEFAUTS)) this.params[nom] = { v, min, max };
+    this._paramsModifies = false;
     // Carte sans limite : avec `fenetre`, la grille de 64 × 64 suit le rover (origine annoncée par la trame ORIGINE,
     // positions envoyées relatives au centre de la fenêtre, carte « par différences »). Sans, c'est un rover non mis à jour.
     this.fenetre = fenetre;
@@ -230,6 +238,9 @@ export class FauxRover {
     if (!ordre) return;
     switch (ordre.type) {
       case 'ping': this.planifier(() => this.sortie(encoderPong(ordre.n)), 15 + this.alea() * 25); return;
+      case 'echo':
+        if (this.firmware === 'rust') this.planifier(() => this.sortie(encoderEchoRetour(ordre.donnees)), 10 + this.alea() * 15);
+        return;
       case 'urgence':
         this.urgence = ordre.actif;
         if (ordre.actif) this.annuler();
@@ -263,12 +274,54 @@ export class FauxRover {
       case 'param': {
         const p = this.params[args[0]]; const v = Number(args[1]);
         if (!p || !Number.isFinite(v)) { this.err(`paramètre inconnu ou valeur invalide : ${args.join(' ')}`); break; }
-        p.v = limiter(v, p.min, p.max);
+        const borne = limiter(v, p.min, p.max);
+        if (borne !== p.v) this._paramsModifies = true;
+        p.v = borne;
         this.evt(`${args[0]} = ${p.v}`);
         this.ligneP(args[0]);
         break;
       }
-      case 'params': Object.keys(this.params).forEach((n) => this.ligneP(n)); break;
+      case 'params':
+        if (args[0] === 'sauver') {
+          if (this.firmware !== 'rust') { this.err('commande inconnue : params sauver'); break; }
+          if (Math.hypot(this.vxb, this.vyb) > 0.02 || Math.abs(this.w) > 0.05) {
+            this.err('params : rover en mouvement');
+          } else if (this._paramsModifies) {
+            this._paramsModifies = false;
+            this.evt('paramètres enregistrés');
+          } else {
+            this.evt('paramètres inchangés');
+          }
+          break;
+        }
+        if (args[0] === 'usine') {
+          if (this.firmware !== 'rust') { this.err('commande inconnue : params usine'); break; }
+          for (const [nom, [v, min, max]] of Object.entries(DEFAUTS)) this.params[nom] = { v, min, max };
+          this._paramsModifies = false;
+          this.evt("paramètres d'usine restaurés");
+          Object.keys(this.params).forEach((n) => this.ligneP(n));
+          break;
+        }
+        if (args.length === 0) Object.keys(this.params).forEach((n) => this.ligneP(n));
+        else this.err(`commande params inconnue : ${args.join(' ')}`);
+        break;
+      case 'nom': {
+        if (this.firmware !== 'rust' && this.firmware !== 'micropython') { this.err('commande inconnue : nom'); break; }
+        if (args.length === 1 && args[0] === '-') {
+          this.nom = this.nomOrigine;
+          this.evt(`nom enregistré : ${this.nomOrigine} (au prochain démarrage)`);
+        } else if (args.length === 1 && /^[\x21-\x7e]{1,20}$/.test(args[0])) {
+          this.nom = args[0];
+          this.evt(`nom enregistré : ${this.nom} (au prochain démarrage)`);
+        } else {
+          this.err('nom invalide (20 caractères ASCII sans espace, ou -)');
+        }
+        break;
+      }
+      case 'maj':
+        if (this.firmware === 'micropython') this.evt('mise à jour sans fil prête (trames 0x20 à 0x23)');
+        else this.err('mise à jour sans fil : indisponible');
+        break;
       case 'recaler': this.recaler(); break;
       case 'carte':
         if (args[0] === 'raz') { this.carte.fill(0); this.renvoyerTout(); this.evt('carte effacée'); } else this.err('commande carte inconnue');
@@ -288,7 +341,25 @@ export class FauxRover {
         break;
       }
       case 'materiel':
-        this.texte('materiel cycles=' + Math.round(this.t * 100) + ' calcul=700 calcul_max=2000 duree_max=2300 retards=0 err_driver=0 err_centrale=0 mem=73728');
+        if (this.firmware === 'rust') {
+          this.texte(`materiel cycles=${73120 + Math.round(this.t * 100)} calcul=240 calcul_max=328 duree_max=340 retards=0 err_driver=0 err_centrale=0 mem=148400 pile0=6388 pile1=1756 code_ram=55252 bus_max=0`);
+          this.texte('acquisition bus=0 bus_max=0 age=3972');
+        } else if (this.firmware === 'micropython') {
+          this.texte(`materiel cycles=${46333 + Math.round(this.t * 100)} calcul=535 calcul_max=1853 duree_max=3183 retards=0 err_driver=0 err_centrale=0 mem=71728`);
+        } else {
+          this.texte('materiel cycles=' + Math.round(this.t * 100) + ' calcul=700 calcul_max=2000 duree_max=2300 retards=0 err_driver=0 err_centrale=0 mem=73728');
+        }
+        break;
+      case 'profil':
+        if (this.firmware === 'micropython') {
+          if (args[0] === 'raz') this.evt('profil remis à zéro');
+          else {
+            this.texte('profil boucle max=540 moy=210 n=1200');
+            this.texte('profil depassements gt2ms=0 gt5ms=0');
+          }
+        } else {
+          this.err('commande inconnue : profil');
+        }
         break;
       default: this.err(`commande inconnue : ${mot}`);
     }
@@ -303,8 +374,8 @@ export class FauxRover {
 
   /** Lignes envoyées à la connexion : identité du rover et liste des comportements. */
   envoyerInfos() {
-    this.texte(`info version=demo-1.0 nom=Rover-DEMO cellule=${CELLULE} v_max=${this.params.v_max.v} w_max=${this.params.w_max.v}`);
-    this.texte(`modes ${MODES.join(',')}`);
+    this.texte(`info version=${this.version} nom=${this.nom} cellule=${CELLULE} v_max=${this.params.v_max.v} w_max=${this.params.w_max.v}`);
+    this.texte(`modes ${this.modes.join(',')}`);
   }
 
   // ===== Comportements =====
@@ -317,7 +388,7 @@ export class FauxRover {
   }
 
   lancerMode(nom, args) {
-    if (!MODES.includes(nom)) { this.err(`mode inconnu : ${nom}`); return; }
+    if (!this.modes.includes(nom)) { this.err(`mode inconnu : ${nom}`); return; }
     this.annuler();
     if (nom === 'arret' || nom === 'manuel') { this.evt('arrêt'); return; }
     this.mode = nom;
@@ -878,7 +949,7 @@ export class FauxRover {
     this.sortie(encoderEtat({
       versionOrigine: this.fenetre ? this.versionOrigine : undefined,
       x: (this.x - c.x) * 1000, y: (this.y - c.y) * 1000, cap: degres(this.cap), drapeaux: this.drapeaux(),
-      comportement: this.but && !this.but.base && this.mode === 'manuel' ? 0 : Math.max(0, MODES.indexOf(this.mode)),
+      comportement: this.but && !this.but.base && this.mode === 'manuel' ? 0 : Math.max(0, this.modes.indexOf(this.mode)),
       tension: this.tension + (this.alea() - 0.5) * 0.04, tete: this.tete, sonar: this.dernierEcho,
       cibleGis, cibleD, libre: this.libreCm ?? 255,
       vitesse: (this.vitesseReelle ?? 0) * 100,

@@ -38,8 +38,9 @@ export class TransportBle extends Transport {
     this._voulu = true;
     this._changerEtat('connexion', 'Choix du rover…');
     try {
+      // Le nom Bluetooth peut être personnalisé (plus forcément « Rover-XXXX ») : on cherche par service UART Nordic.
       this.appareil = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'Rover-' }, { services: [BLE.service] }],
+        filters: [{ services: [BLE.service] }, { namePrefix: 'Rover-' }],
         optionalServices: [BLE.service],
       });
     } catch (erreur) {

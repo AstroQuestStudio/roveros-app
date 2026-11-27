@@ -23,6 +23,7 @@ export const T = {
   ALLER: 0x05,
   TEXTE: 0x10,
   PING: 0x11,
+  ECHO: 0x12,
   // rover -> téléphone
   ETAT: 0x81,
   POINTS: 0x82,
@@ -30,6 +31,7 @@ export const T = {
   CHEMIN: 0x84,
   TEXTE_ROVER: 0x85,
   PONG: 0x91,
+  ECHO_RETOUR: 0x92,
   // mise à jour du firmware (0xA0) : elle se fait depuis le PC, l'application ignore ces trames
   MAJ: 0xA0,
   // carte sans limite : origine de la fenêtre glissante de la carte (voir docs/CARTE_SANS_LIMITE.md du dépôt roveros)
@@ -138,6 +140,15 @@ export function encoderTexte(texte) {
 
 export const encoderPing = (n) => Uint8Array.of(T.PING, n & 0xff);
 
+/** ECHO (0x12) : trame d'écho de banc ; le rover renvoie 0x92 avec la même charge utile. */
+export function encoderEcho(donnees = new Uint8Array(0)) {
+  const o = versOctets(donnees);
+  const t = new Uint8Array(1 + o.length);
+  t[0] = T.ECHO;
+  t.set(o, 1);
+  return t;
+}
+
 // ---------- Rover -> téléphone : décodage ----------
 
 /**
@@ -157,6 +168,7 @@ export function decoder(donnees) {
       case T.CHEMIN: return decoderChemin(o, vue);
       case T.TEXTE_ROVER: return { type: 'texte', texte: decodeurTexte.decode(o.subarray(1)).replace(/[\r\n]+$/, '') };
       case T.PONG: return o.length >= 2 ? { type: 'pong', n: o[1] } : null;
+      case T.ECHO_RETOUR: return { type: 'echo', donnees: o.slice(1) };
       case T.ORIGINE: return decoderOrigine(o, vue);
       case T.MAJ: return { type: 'maj' }; // ignorée proprement (jamais une erreur, jamais de texte)
       default: return { type: 'inconnu', code: o[0], longueur: o.length };
@@ -300,13 +312,19 @@ export function analyserLigne(ligne) {
     case 'info': return { genre: 'info', valeurs: analyserCles(reste), texte };
     case 'calib': return { genre: 'calib', valeurs: analyserCles(reste), texte };
     case 'materiel': return { genre: 'materiel', valeurs: analyserCles(reste), texte };
+    case 'acquisition': return { genre: 'acquisition', valeurs: analyserCles(reste), texte };
+    case 'profil': {
+      const premier = reste.split(/\s+/)[0] ?? '';
+      const section = premier && !premier.includes('=') ? premier : '';
+      return { genre: 'profil', section, valeurs: analyserCles(reste), texte };
+    }
     case 'modes': return { genre: 'modes', modes: reste.split(',').map((s) => s.trim()).filter(Boolean), texte };
     case 'evt': return { genre: 'evt', message: reste, texte };
     case 'err': return { genre: 'err', message: reste, texte };
     case 'p': {
       const [nom, valeur, min, max] = reste.split(/\s+/);
       const v = Number(valeur);
-      if (!nom || valeur === undefined || !Number.isFinite(v)) return { genre: 'autre', texte };
+      if (!nom || valeur === undefined || !Number.isFinite(v)) return { genre: 'autre', mot, reste, valeurs: analyserCles(reste), texte };
       const mn = Number(min);
       const mx = Number(max);
       return {
@@ -316,7 +334,7 @@ export function analyserLigne(ligne) {
         texte,
       };
     }
-    default: return { genre: 'autre', texte };
+    default: return { genre: 'autre', mot, reste, valeurs: analyserCles(reste), texte };
   }
 }
 
@@ -406,6 +424,15 @@ export function encoderTexteRover(texte) {
 
 export const encoderPong = (n) => Uint8Array.of(T.PONG, n & 0xff);
 
+/** ECHO_RETOUR (0x92) : utilisé par le faux rover et les tests. */
+export function encoderEchoRetour(donnees = new Uint8Array(0)) {
+  const o = versOctets(donnees);
+  const t = new Uint8Array(1 + o.length);
+  t[0] = T.ECHO_RETOUR;
+  t.set(o, 1);
+  return t;
+}
+
 /** Décode une trame téléphone -> rover (utilisé par la démo : le faux rover lit nos ordres). */
 export function decoderOrdre(donnees) {
   const o = versOctets(donnees);
@@ -422,6 +449,7 @@ export function decoderOrdre(donnees) {
       return o.length >= 5 ? { type: 'aller', x: vue.getInt16(1, true), y: vue.getInt16(3, true) } : null;
     case T.TEXTE: return { type: 'texte', texte: decodeurTexte.decode(o.subarray(1)).trim() };
     case T.PING: return o.length >= 2 ? { type: 'ping', n: o[1] } : null;
+    case T.ECHO: return { type: 'echo', donnees: o.slice(1) };
     default: return { type: 'inconnu', code: o[0] };
   }
 }
